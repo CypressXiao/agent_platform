@@ -41,11 +41,14 @@ public class PlanExecuteTool implements BuiltinToolHandler {
     @Override
     public Object execute(CallerIdentity identity, Map<String, Object> arguments) {
         String planId = (String) arguments.get("plan_id");
-        Plan plan = planningEngine.executePlan(identity, planId);
+        String approvalStatus = (String) arguments.get("approval_status");
+        
+        Plan plan = planningEngine.resumePlan(identity, planId, approvalStatus);
 
         return Map.of(
             "plan_id", plan.getPlanId(),
             "status", plan.getStatus(),
+            "strategy", plan.getStrategyType(),
             "steps", plan.getSteps()
         );
     }

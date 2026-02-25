@@ -42,7 +42,7 @@ public class McpSseController {
         CallerIdentity identity = callerIdentityExtractor.get();
         String sessionId = UUID.randomUUID().toString();
 
-        log.info("SSE connection established: sessionId={}, tenant={}", sessionId, identity.tenantId());
+        log.info("SSE connection established: sessionId={}, tenant={}", sessionId, identity.getTenantId());
 
         // 创建会话
         Sinks.Many<ServerSentEvent<String>> sink = sessionManager.createSession(sessionId, identity);

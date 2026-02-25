@@ -4,9 +4,9 @@ import com.agentplatform.common.exception.McpErrorCode;
 import com.agentplatform.common.exception.McpException;
 import com.agentplatform.common.model.CallerIdentity;
 import com.agentplatform.gateway.mcp.router.ToolAggregator;
-import com.agentplatform.gateway.mcp.router.ToolDispatcher;
 import com.agentplatform.gateway.planner.model.Plan;
 import com.agentplatform.gateway.planner.repository.PlanRepository;
+import com.agentplatform.gateway.planner.strategy.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -16,8 +16,14 @@ import java.time.Instant;
 import java.util.*;
 
 /**
- * Planning engine that uses LLM to decompose goals into executable steps.
- * Each step references a tool that the caller has access to.
+ * Planning engine - 策略调度器
+ * 
+ * 支持多种执行策略：
+ * - plan_then_execute: 先规划后执行
+ * - react: ReAct 循环
+ * - human_in_loop: 关键步骤需人工审批
+ * 
+ * SDK 用户可以通过 StrategyRegistry 注册自定义策略
  */
 @Service
 @ConditionalOnProperty(name = "agent-platform.planner.enabled", havingValue = "true")
@@ -27,179 +33,206 @@ public class PlanningEngine {
 
     private final PlanRepository planRepo;
     private final ToolAggregator toolAggregator;
-    private final ToolDispatcher toolDispatcher;
+    private final StrategyRegistry strategyRegistry;
 
     /**
-     * Create a plan by calling LLM to decompose the goal into steps.
+     * 使用默认策略创建并执行计划
      */
-    @SuppressWarnings("unchecked")
-    public Plan createPlan(CallerIdentity identity, String goal, Map<String, Object> context) {
-        // Get available tools for the caller
-        List<ToolAggregator.ToolView> availableTools = toolAggregator.listTools(identity);
-        List<String> toolNames = availableTools.stream().map(ToolAggregator.ToolView::name).toList();
-
-        // Build prompt for LLM
-        String prompt = buildPlanningPrompt(goal, toolNames, context);
-
-        // Call LLM via the llm_chat built-in tool (if available)
-        List<Map<String, Object>> steps;
-        String llmModel = "default";
-        int tokensUsed = 0;
-
-        try {
-            Map<String, Object> llmArgs = Map.of(
-                "model", "default",
-                "messages", List.of(
-                    Map.of("role", "system", "content", "You are a task planner. Decompose the goal into steps using available tools. Return JSON array of steps."),
-                    Map.of("role", "user", "content", prompt)
-                ),
-                "temperature", 0.3
-            );
-
-            Object llmResult = toolDispatcher.dispatchInternal(identity, "llm_chat", llmArgs);
-
-            if (llmResult instanceof Map<?, ?> resultMap) {
-                String content = (String) resultMap.get("content");
-                llmModel = resultMap.containsKey("model") ? String.valueOf(resultMap.get("model")) : "default";
-                Map<String, Object> usage = (Map<String, Object>) resultMap.get("usage");
-                if (usage != null) {
-                    tokensUsed = ((Number) usage.getOrDefault("total_tokens", 0)).intValue();
-                }
-                steps = parseSteps(content, toolNames);
-            } else {
-                steps = createFallbackSteps(goal, toolNames);
-            }
-        } catch (Exception e) {
-            log.warn("LLM planning failed, using fallback: {}", e.getMessage());
-            steps = createFallbackSteps(goal, toolNames);
-        }
-
-        // Validate that all referenced tools are accessible
-        for (Map<String, Object> step : steps) {
-            String toolName = (String) step.get("tool");
-            if (toolName != null && !toolNames.contains(toolName)) {
-                throw new McpException(McpErrorCode.PLAN_TOOL_ACCESS_DENIED,
-                    "Plan references inaccessible tool: " + toolName);
-            }
-        }
-
-        Plan plan = Plan.builder()
-            .planId(UUID.randomUUID().toString())
-            .actorTid(identity.tenantId())
-            .goal(goal)
-            .steps(steps)
-            .context(context)
-            .status("CREATED")
-            .llmModel(llmModel)
-            .llmTokensUsed(tokensUsed)
-            .build();
-
-        return planRepo.save(plan);
+    public Plan createAndExecute(CallerIdentity identity, String goal, Map<String, Object> context) {
+        return createAndExecute(identity, goal, context, null);
     }
 
     /**
-     * Execute a plan step by step.
+     * 使用指定策略创建并执行计划
+     * 
+     * @param identity 调用方身份
+     * @param goal 目标描述
+     * @param context 初始上下文
+     * @param strategyName 策略名称（null 使用默认策略）
      */
-    @SuppressWarnings("unchecked")
-    public Plan executePlan(CallerIdentity identity, String planId) {
+    public Plan createAndExecute(CallerIdentity identity, String goal, Map<String, Object> context, String strategyName) {
+        ExecutionStrategy strategy = strategyName != null 
+            ? strategyRegistry.getOrThrow(strategyName)
+            : strategyRegistry.getDefault();
+
+        return executeWithStrategy(identity, goal, context, strategy);
+    }
+
+    /**
+     * 使用指定策略执行
+     */
+    public Plan executeWithStrategy(CallerIdentity identity, String goal, Map<String, Object> context, 
+                                     ExecutionStrategy strategy) {
+        // 构建执行上下文
+        List<String> toolNames = toolAggregator.listTools(identity).stream()
+            .map(ToolAggregator.ToolView::name)
+            .toList();
+
+        PlanContext planContext = PlanContext.builder()
+            .goal(goal)
+            .state(context != null ? new HashMap<>(context) : new HashMap<>())
+            .availableTools(toolNames)
+            .build();
+
+        // 规划阶段
+        List<Map<String, Object>> steps = strategy.plan(identity, goal, planContext);
+
+        // 创建 Plan 记录
+        Plan plan = Plan.builder()
+            .planId(UUID.randomUUID().toString())
+            .actorTid(identity.getTenantId())
+            .goal(goal)
+            .steps(new ArrayList<>(steps))
+            .context(context)
+            .status("EXECUTING")
+            .strategyType(strategy.name())
+            .build();
+        plan = planRepo.save(plan);
+
+        // 执行阶段
+        plan = executeSteps(identity, plan, strategy, planContext);
+
+        return plan;
+    }
+
+    /**
+     * 继续执行已暂停的计划（用于 Human-in-the-Loop 审批后继续）
+     */
+    public Plan resumePlan(CallerIdentity identity, String planId, String approvalStatus) {
         Plan plan = planRepo.findById(planId)
             .orElseThrow(() -> new McpException(McpErrorCode.PLAN_NOT_FOUND, "Plan not found: " + planId));
 
-        if (!identity.tenantId().equals(plan.getActorTid())) {
+        if (!identity.getTenantId().equals(plan.getActorTid())) {
             throw new McpException(McpErrorCode.FORBIDDEN_POLICY, "Not authorized to execute this plan");
         }
 
-        plan.setStatus("EXECUTING");
-        planRepo.save(plan);
-
-        List<Map<String, Object>> steps = plan.getSteps();
-        Map<String, Object> stepContext = new HashMap<>(plan.getContext() != null ? plan.getContext() : Map.of());
-
-        for (int i = 0; i < steps.size(); i++) {
-            Map<String, Object> step = new HashMap<>(steps.get(i));
-            String toolName = (String) step.get("tool");
-            Map<String, Object> args = (Map<String, Object>) step.getOrDefault("arguments", Map.of());
-
-            // Resolve arguments from context
-            Map<String, Object> resolvedArgs = resolveStepArguments(args, stepContext);
-
-            try {
-                Object result = toolDispatcher.dispatchInternal(identity, toolName, resolvedArgs);
-                step.put("status", "COMPLETED");
-                step.put("result", result);
-                stepContext.put("step_" + i + "_result", result);
-            } catch (Exception e) {
-                step.put("status", "FAILED");
-                step.put("error", e.getMessage());
-                steps.set(i, step);
-                plan.setSteps(steps);
-                plan.setStatus("FAILED");
-                plan.setCompletedAt(Instant.now());
-                return planRepo.save(plan);
-            }
-
-            steps.set(i, step);
+        if (!"WAITING_APPROVAL".equals(plan.getStatus())) {
+            throw new McpException(McpErrorCode.BAD_REQUEST, "Plan is not waiting for approval");
         }
 
-        plan.setSteps(steps);
+        ExecutionStrategy strategy = strategyRegistry.getOrThrow(plan.getStrategyType());
+
+        // 重建上下文
+        List<String> toolNames = toolAggregator.listTools(identity).stream()
+            .map(ToolAggregator.ToolView::name)
+            .toList();
+
+        PlanContext planContext = PlanContext.builder()
+            .goal(plan.getGoal())
+            .state(plan.getContext() != null ? new HashMap<>(plan.getContext()) : new HashMap<>())
+            .availableTools(toolNames)
+            .approvalStatus(approvalStatus)
+            .build();
+
+        plan.setStatus("EXECUTING");
+        plan = planRepo.save(plan);
+
+        return executeSteps(identity, plan, strategy, planContext);
+    }
+
+    /**
+     * 执行步骤
+     */
+    private Plan executeSteps(CallerIdentity identity, Plan plan, ExecutionStrategy strategy, PlanContext context) {
+        List<Map<String, Object>> steps = plan.getSteps();
+
+        while (context.getCurrentStepIndex() < steps.size()) {
+            int idx = context.getCurrentStepIndex();
+            Map<String, Object> step = new HashMap<>(steps.get(idx));
+
+            // 执行步骤
+            StepResult result = strategy.executeStep(identity, step, context);
+            context.addHistory(result);
+
+            // 更新步骤状态
+            step.put("status", result.isSuccess() ? "COMPLETED" : "FAILED");
+            step.put("result", result.getOutput());
+            step.put("latency_ms", result.getLatencyMs());
+            if (!result.isSuccess()) {
+                step.put("error", result.getError());
+            }
+            steps.set(idx, step);
+            plan.setSteps(steps);
+
+            // 决定下一步动作
+            NextAction nextAction = strategy.onStepComplete(step, result, context);
+
+            switch (nextAction) {
+                case CONTINUE:
+                    // 继续下一步
+                    break;
+
+                case REPLAN:
+                    // 重新规划（ReAct 模式）
+                    if (strategy.supportsReplan() && strategy instanceof ReActLoopStrategy reactStrategy) {
+                        Map<String, Object> nextStep = reactStrategy.reasonNextStep(identity, plan.getGoal(), context);
+                        steps.add(nextStep);
+                        plan.setSteps(steps);
+                    }
+                    break;
+
+                case WAIT_APPROVAL:
+                    // 暂停等待审批
+                    plan.setStatus("WAITING_APPROVAL");
+                    plan = planRepo.save(plan);
+                    return plan;
+
+                case END:
+                    // 正常结束 - 兜底保存记忆（用户可覆盖 saveToMemory 自定义）
+                    saveMemoryIfSupported(strategy, identity, plan.getGoal(), context, true);
+                    plan.setStatus("COMPLETED");
+                    plan.setCompletedAt(Instant.now());
+                    return planRepo.save(plan);
+
+                case FAILED:
+                    // 执行失败 - 兜底保存记忆（记录失败经验）
+                    saveMemoryIfSupported(strategy, identity, plan.getGoal(), context, false);
+                    plan.setStatus("FAILED");
+                    plan.setCompletedAt(Instant.now());
+                    return planRepo.save(plan);
+            }
+
+            planRepo.save(plan);
+        }
+
+        // 所有步骤执行完成
         plan.setStatus("COMPLETED");
         plan.setCompletedAt(Instant.now());
         return planRepo.save(plan);
     }
 
-    private String buildPlanningPrompt(String goal, List<String> toolNames, Map<String, Object> context) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("Goal: ").append(goal).append("\n\n");
-        sb.append("Available tools: ").append(String.join(", ", toolNames)).append("\n\n");
-        if (context != null && !context.isEmpty()) {
-            sb.append("Context: ").append(context).append("\n\n");
+    /**
+     * 兜底保存记忆 - 只有开启记忆时才调用
+     * 用户需要自己实现 saveToMemory 方法
+     */
+    private void saveMemoryIfSupported(ExecutionStrategy strategy, CallerIdentity identity, 
+                                        String goal, PlanContext context, boolean success) {
+        // 只有开启记忆时才保存
+        if (!context.isMemoryEnabled()) {
+            return;
         }
-        sb.append("Create a step-by-step plan as a JSON array. Each step should have: ");
-        sb.append("\"description\" (string), \"tool\" (string, one of the available tools), ");
-        sb.append("\"arguments\" (object, tool input arguments).");
-        return sb.toString();
-    }
-
-    @SuppressWarnings("unchecked")
-    private List<Map<String, Object>> parseSteps(String llmOutput, List<String> toolNames) {
+        
         try {
-            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-            // Try to extract JSON array from LLM output
-            String json = llmOutput;
-            int start = json.indexOf('[');
-            int end = json.lastIndexOf(']');
-            if (start >= 0 && end > start) {
-                json = json.substring(start, end + 1);
+            if (strategy instanceof BaseExecutionStrategy baseStrategy) {
+                baseStrategy.saveToMemory(identity, goal, context, success);
             }
-            return mapper.readValue(json, List.class);
         } catch (Exception e) {
-            log.warn("Failed to parse LLM plan output, using fallback");
-            return createFallbackSteps(llmOutput, toolNames);
+            log.warn("Failed to save memory (non-fatal): {}", e.getMessage());
         }
     }
 
-    private List<Map<String, Object>> createFallbackSteps(String goal, List<String> toolNames) {
-        // Simple fallback: create a single step using echo tool
-        return List.of(Map.of(
-            "description", "Execute goal: " + goal,
-            "tool", "echo",
-            "arguments", Map.of("message", goal),
-            "status", "PENDING"
-        ));
+    /**
+     * 获取可用策略列表
+     */
+    public List<String> listStrategies() {
+        return strategyRegistry.listStrategies();
     }
 
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> resolveStepArguments(Map<String, Object> args, Map<String, Object> context) {
-        Map<String, Object> resolved = new HashMap<>();
-        for (Map.Entry<String, Object> entry : args.entrySet()) {
-            Object value = entry.getValue();
-            if (value instanceof String ref && ref.startsWith("$context.")) {
-                String key = ref.substring("$context.".length());
-                resolved.put(entry.getKey(), context.getOrDefault(key, ref));
-            } else {
-                resolved.put(entry.getKey(), value);
-            }
-        }
-        return resolved;
+    /**
+     * 查询计划
+     */
+    public Plan getPlan(String planId) {
+        return planRepo.findById(planId)
+            .orElseThrow(() -> new McpException(McpErrorCode.PLAN_NOT_FOUND, "Plan not found: " + planId));
     }
 }

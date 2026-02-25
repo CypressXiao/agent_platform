@@ -26,7 +26,7 @@ public class GovernanceInterceptor {
     public void preCheck(CallerIdentity identity, Tool tool) {
         // Rate limit check
         int limit = tool.getRateLimit() != null ? tool.getRateLimit() : 100;
-        rateLimitService.check(identity.tenantId(), tool.getToolName(), limit, DEFAULT_WINDOW_MS);
+        rateLimitService.check(identity.getTenantId(), tool.getToolName(), limit, DEFAULT_WINDOW_MS);
 
         // Circuit breaker check (only for upstream tools)
         if (!"builtin".equals(tool.getSourceType())) {

@@ -48,7 +48,7 @@ public class DagExecutionEngine {
             .runId(UUID.randomUUID().toString())
             .graphId(graph.getGraphId())
             .graphVersion(graph.getVersion())
-            .actorTid(identity.tenantId())
+            .actorTid(identity.getTenantId())
             .input(input)
             .status("RUNNING")
             .startedAt(Instant.now())

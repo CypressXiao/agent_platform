@@ -48,13 +48,62 @@ public class LlmAdminController {
     public ResponseEntity<LlmTenantQuota> setQuota(@PathVariable String tenantId,
                                                      @RequestBody LlmTenantQuota quota) {
         quota.setTenantId(tenantId);
+        String modelId = quota.getModelId() != null ? quota.getModelId() : "*";
+        quota.setModelId(modelId);
+
+        // 查找已存在的配额并更新，否则创建新配额
+        LlmTenantQuota existing = quotaRepo.findByTenantIdAndModelId(tenantId, modelId).orElse(null);
+        if (existing != null) {
+            existing.setRpmLimit(quota.getRpmLimit() != null ? quota.getRpmLimit() : existing.getRpmLimit());
+            existing.setTpmLimit(quota.getTpmLimit() != null ? quota.getTpmLimit() : existing.getTpmLimit());
+            existing.setMonthlyTokenBudget(quota.getMonthlyTokenBudget() != null ? quota.getMonthlyTokenBudget() : existing.getMonthlyTokenBudget());
+            return ResponseEntity.ok(quotaRepo.save(existing));
+        }
+
         if (quota.getQuotaId() == null) quota.setQuotaId(UUID.randomUUID().toString());
-        return ResponseEntity.ok(quotaRepo.save(quota));
+        return ResponseEntity.status(HttpStatus.CREATED).body(quotaRepo.save(quota));
+    }
+
+    @PatchMapping("/quotas/{tenantId}/{modelId}")
+    public ResponseEntity<LlmTenantQuota> updateQuota(@PathVariable String tenantId,
+                                                        @PathVariable String modelId,
+                                                        @RequestBody Map<String, Object> updates) {
+        return quotaRepo.findByTenantIdAndModelId(tenantId, modelId)
+            .map(quota -> {
+                if (updates.containsKey("rpm_limit")) quota.setRpmLimit(((Number) updates.get("rpm_limit")).intValue());
+                if (updates.containsKey("tpm_limit")) quota.setTpmLimit(((Number) updates.get("tpm_limit")).intValue());
+                if (updates.containsKey("monthly_token_budget")) quota.setMonthlyTokenBudget(((Number) updates.get("monthly_token_budget")).longValue());
+                if (updates.containsKey("current_month_usage")) quota.setCurrentMonthUsage(((Number) updates.get("current_month_usage")).longValue());
+                return ResponseEntity.ok(quotaRepo.save(quota));
+            })
+            .orElse(ResponseEntity.notFound().build());
+    }
+
+    @DeleteMapping("/quotas/{tenantId}/{modelId}")
+    public ResponseEntity<Void> deleteQuota(@PathVariable String tenantId, @PathVariable String modelId) {
+        return quotaRepo.findByTenantIdAndModelId(tenantId, modelId)
+            .map(quota -> {
+                quotaRepo.delete(quota);
+                return ResponseEntity.noContent().<Void>build();
+            })
+            .orElse(ResponseEntity.notFound().build());
     }
 
     @GetMapping("/quotas/{tenantId}")
     public ResponseEntity<List<LlmTenantQuota>> getQuotas(@PathVariable String tenantId) {
         return ResponseEntity.ok(quotaRepo.findByTenantId(tenantId));
+    }
+
+    @PostMapping("/quotas/{tenantId}/reset")
+    public ResponseEntity<LlmTenantQuota> resetMonthlyUsage(@PathVariable String tenantId,
+                                                              @RequestParam(defaultValue = "*") String modelId) {
+        return quotaRepo.findByTenantIdAndModelId(tenantId, modelId)
+            .map(quota -> {
+                quota.setCurrentMonthUsage(0L);
+                quota.setResetAt(java.time.Instant.now());
+                return ResponseEntity.ok(quotaRepo.save(quota));
+            })
+            .orElse(ResponseEntity.notFound().build());
     }
 
     @GetMapping("/usage")

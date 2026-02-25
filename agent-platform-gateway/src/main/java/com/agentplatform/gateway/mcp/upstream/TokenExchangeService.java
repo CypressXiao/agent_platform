@@ -124,7 +124,7 @@ public class TokenExchangeService {
     @SuppressWarnings("unchecked")
     private String exchangeOAuth2Token(CallerIdentity identity, UpstreamServer server,
                                         Map<String, Object> authProfile) {
-        String cacheKey = "upstream_token:te:" + server.getServerId() + ":" + identity.tenantId();
+        String cacheKey = "upstream_token:te:" + server.getServerId() + ":" + identity.getTenantId();
 
         String cached = redisTemplate.opsForValue().get(cacheKey);
         if (cached != null) {
@@ -141,7 +141,7 @@ public class TokenExchangeService {
 
         String body = "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" +
             "&subject_token_type=urn:ietf:params:oauth:token-type:jwt" +
-            "&subject_token=" + identity.tokenId() +
+            "&subject_token=" + identity.getTokenId() +
             "&audience=" + audience;
 
         WebClient client = webClientBuilder.build();
@@ -162,7 +162,7 @@ public class TokenExchangeService {
             return "Bearer " + token;
         }
 
-        log.error("Token exchange failed for server {} tenant {}", server.getServerId(), identity.tenantId());
+        log.error("Token exchange failed for server {} tenant {}", server.getServerId(), identity.getTenantId());
         return null;
     }
 }

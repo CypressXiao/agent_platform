@@ -37,11 +37,11 @@ public class PolicyEngine {
 
         try {
             PolicyInput input = new PolicyInput(
-                identity.tenantId(),
+                identity.getTenantId(),
                 tool.getOwnerTid(),
                 tool.getToolName(),
                 tool.getSourceType(),
-                identity.scopes(),
+                identity.getScopes(),
                 null
             );
 
@@ -72,7 +72,7 @@ public class PolicyEngine {
 
                 boolean denied = denyResult != null && Boolean.TRUE.equals(denyResult.get("result"));
                 if (denied) {
-                    log.info("OPA deny rule matched for actor={}, tool={}", identity.tenantId(), tool.getToolName());
+                    log.info("OPA deny rule matched for actor={}, tool={}", identity.getTenantId(), tool.getToolName());
                     return false;
                 }
             } catch (Exception e) {
@@ -97,11 +97,11 @@ public class PolicyEngine {
 
         // Check required scopes
         if (tool.getRequiredScopes() != null && !tool.getRequiredScopes().isEmpty()) {
-            return identity.scopes().containsAll(tool.getRequiredScopes());
+            return identity.getScopes().containsAll(tool.getRequiredScopes());
         }
 
         // Default: allow if basic scope is present or no specific scope required
-        return identity.scopes().contains("mcp:tools-basic") || identity.scopes().isEmpty();
+        return identity.getScopes().contains("mcp:tools-basic") || identity.getScopes().isEmpty();
     }
 
     public record PolicyInput(

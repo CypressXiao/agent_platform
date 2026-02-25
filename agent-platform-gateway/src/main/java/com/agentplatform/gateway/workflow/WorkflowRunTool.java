@@ -63,7 +63,7 @@ public class WorkflowRunTool implements BuiltinToolHandler {
         }
 
         // Permission check: caller must be owner or have grant
-        if (!identity.tenantId().equals(graph.getOwnerTid())) {
+        if (!identity.getTenantId().equals(graph.getOwnerTid())) {
             throw new McpException(McpErrorCode.FORBIDDEN_POLICY,
                 "Not authorized to run workflow owned by " + graph.getOwnerTid());
         }

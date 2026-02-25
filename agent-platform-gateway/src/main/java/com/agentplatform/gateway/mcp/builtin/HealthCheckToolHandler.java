@@ -50,7 +50,7 @@ public class HealthCheckToolHandler implements BuiltinToolHandler {
                 .orElse(Map.of("error", "Server not found: " + serverId));
         }
 
-        List<UpstreamServer> servers = serverRepo.findByOwnerTid(identity.tenantId());
+        List<UpstreamServer> servers = serverRepo.findByOwnerTid(identity.getTenantId());
         return Map.of(
             "servers", servers.stream().map(this::toStatusMap).collect(Collectors.toList()),
             "total", servers.size(),

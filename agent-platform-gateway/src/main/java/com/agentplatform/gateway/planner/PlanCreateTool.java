@@ -33,7 +33,8 @@ public class PlanCreateTool implements BuiltinToolHandler {
             "type", "object",
             "properties", Map.of(
                 "goal", Map.of("type", "string", "description", "The goal to plan for"),
-                "context", Map.of("type", "object", "description", "Additional context for planning")
+                "context", Map.of("type", "object", "description", "Additional context for planning"),
+                "strategy", Map.of("type", "string", "description", "Execution strategy: plan_then_execute, react, human_in_loop")
             ),
             "required", List.of("goal")
         );
@@ -44,14 +45,16 @@ public class PlanCreateTool implements BuiltinToolHandler {
     public Object execute(CallerIdentity identity, Map<String, Object> arguments) {
         String goal = (String) arguments.get("goal");
         Map<String, Object> context = (Map<String, Object>) arguments.getOrDefault("context", Map.of());
+        String strategy = (String) arguments.get("strategy");
 
-        Plan plan = planningEngine.createPlan(identity, goal, context);
+        Plan plan = planningEngine.createAndExecute(identity, goal, context, strategy);
 
         return Map.of(
             "plan_id", plan.getPlanId(),
             "goal", plan.getGoal(),
             "steps", plan.getSteps(),
             "status", plan.getStatus(),
+            "strategy", plan.getStrategyType(),
             "llm_model", plan.getLlmModel() != null ? plan.getLlmModel() : "",
             "llm_tokens_used", plan.getLlmTokensUsed() != null ? plan.getLlmTokensUsed() : 0
         );

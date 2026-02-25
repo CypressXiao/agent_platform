@@ -65,8 +65,8 @@ public class ToolDispatcher {
             }
 
             // 4. Cross-tenant Grant check
-            if (!identity.tenantId().equals(tool.getOwnerTid()) && !"system".equals(tool.getOwnerTid())) {
-                Grant grant = grantEngine.check(identity.tenantId(), tool.getOwnerTid(), tool.getToolId());
+            if (!identity.getTenantId().equals(tool.getOwnerTid()) && !"system".equals(tool.getOwnerTid())) {
+                Grant grant = grantEngine.check(identity.getTenantId(), tool.getOwnerTid(), tool.getToolId());
                 grantId = grant != null ? grant.getGrantId() : null;
             }
 
@@ -111,7 +111,7 @@ public class ToolDispatcher {
     }
 
     private Tool resolveToolForCaller(CallerIdentity identity, String toolName) {
-        List<Tool> candidates = toolRepo.findAccessibleByName(toolName, identity.tenantId());
+        List<Tool> candidates = toolRepo.findAccessibleByName(toolName, identity.getTenantId());
         if (candidates.isEmpty()) {
             throw new McpException(McpErrorCode.TOOL_NOT_FOUND, "Tool not found: " + toolName);
         }

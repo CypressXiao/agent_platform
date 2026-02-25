@@ -24,7 +24,7 @@ public class ScopeValidator {
             return;
         }
 
-        Set<String> callerScopes = identity.scopes();
+        Set<String> callerScopes = identity.getScopes();
         List<String> missingScopes = requiredScopes.stream()
             .filter(s -> !callerScopes.contains(s))
             .toList();

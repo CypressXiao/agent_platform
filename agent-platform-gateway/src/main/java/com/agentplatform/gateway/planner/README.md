@@ -1,8 +1,33 @@
 # v2/planner — 规划服务
 
-本包实现 LLM 驱动的任务规划与执行服务，作为 v2 可选子系统，通过配置开关启用。
+本包实现 LLM 驱动的任务规划与执行服务，支持多种执行策略，作为 v2 可选子系统，通过配置开关启用。
 
-**启用方式**: `agent-platform.v2.planner.enabled=true`
+**启用方式**: `agent-platform.planner.enabled=true`
+
+## 架构概览
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  PlanningEngine（策略调度器）                                    │
+│     └─► 选择策略 → 执行 → 保存记忆（可选）                       │
+├─────────────────────────────────────────────────────────────────┤
+│  内置策略                                                        │
+│  ├─ PlanThenExecuteStrategy  先规划后执行                        │
+│  ├─ ReActLoopStrategy        ReAct 循环                          │
+│  └─ HumanInLoopStrategy      关键步骤需人工审批                  │
+├─────────────────────────────────────────────────────────────────┤
+│  BaseExecutionStrategy（抽象基类）                               │
+│     └─► 提供钩子方法，SDK 用户可覆盖自定义                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## 执行策略
+
+| 策略 | 说明 | 特点 |
+|------|------|------|
+| `plan_then_execute` | LLM 一次性生成完整步骤，顺序执行 | 简单，无反馈 |
+| `react` | Reason → Act → Observe 循环 | 动态调整，每步反馈 |
+| `human_in_loop` | 关键步骤暂停等待人工审批 | 可控，高风险操作需确认 |
 
 ## 文件清单
 
@@ -10,56 +35,100 @@
 
 | 文件 | 说明 |
 |------|------|
-| `Plan.java` | 规划实体，对应 `plan` 表。包含执行方租户、目标描述、Trace ID、JSONB 格式的步骤列表和上下文、状态（`created` / `executing` / `completed` / `failed`）、使用的 LLM 模型信息、Token 消耗 |
+| `Plan.java` | 规划实体，包含目标、步骤列表、策略类型、状态、LLM 信息 |
 
-### 数据访问（repository/）
+### 策略（strategy/）
 
 | 文件 | 说明 |
 |------|------|
-| `PlanRepository.java` | 规划数据访问，支持按执行方租户和状态查询 |
+| `ExecutionStrategy.java` | 策略接口，定义 `plan()`、`executeStep()`、`onStepComplete()` |
+| `BaseExecutionStrategy.java` | 抽象基类，提供钩子方法供 SDK 用户覆盖 |
+| `PlanContext.java` | 执行上下文，包含 `sessionId`、`memoryEnabled`、`state` 等 |
+| `StepResult.java` | 步骤执行结果 |
+| `NextAction.java` | 下一步动作枚举：`CONTINUE`/`REPLAN`/`WAIT_APPROVAL`/`END`/`FAILED` |
+| `StrategyRegistry.java` | 策略注册表 |
+
+#### 抽象策略类（SDK 用户继承）
+
+| 文件 | 说明 | 必须实现的方法 |
+|------|------|----------------|
+| `PlanThenExecuteStrategy.java` | 先规划后执行策略 | `buildPlanningSystemPrompt()`, `buildPlanningUserPrompt()` |
+| `ReActLoopStrategy.java` | ReAct 循环策略 | `buildReActSystemPrompt()`, `buildReActUserPrompt()` |
+| `HumanInLoopStrategy.java` | 人工审批策略 | `buildPlanningSystemPrompt()`, `buildPlanningUserPrompt()`, `getApprovalRequiredTools()` |
+
+#### 默认实现（开箱即用）
+
+| 文件 | 说明 |
+|------|------|
+| `DefaultPlanThenExecuteStrategy.java` | 默认先规划后执行实现 |
+| `DefaultReActStrategy.java` | 默认 ReAct 实现 |
+| `DefaultHumanInLoopStrategy.java` | 默认人工审批实现 |
 
 ### 规划引擎
 
 | 文件 | 说明 |
 |------|------|
-| `PlanningEngine.java` | 规划引擎核心。**创建阶段**：收集调用方可用的 Tool 列表，构建 Prompt，调用 LLM（通过 `llm_chat` 内置工具）生成步骤分解，验证步骤中引用的 Tool 是否可访问，持久化 Plan。**执行阶段**：逐步执行 Plan 中的步骤，每步通过 `ToolDispatcher.dispatchInternal()` 调用对应 Tool，记录每步结果，失败时标记并停止 |
+| `PlanningEngine.java` | 策略调度器，负责选择策略、执行步骤、保存记忆 |
 
 ### 内置工具
 
 | 文件 | 工具名 | 说明 |
 |------|--------|------|
-| `PlanCreateTool.java` | `plan_create` | 创建规划。接收 `goal`（目标描述），返回 Plan ID、状态、步骤列表 |
-| `PlanExecuteTool.java` | `plan_execute` | 执行规划。接收 `plan_id`，逐步执行并返回最终状态和各步结果 |
-| `PlanStatusTool.java` | `plan_status` | 查询规划状态。接收 `plan_id`，返回 Plan 的完整信息（目标、状态、步骤、Token 消耗） |
+| `PlanCreateTool.java` | `plan_create` | 创建并执行规划，支持 `strategy` 参数 |
+| `PlanExecuteTool.java` | `plan_execute` | 继续执行暂停的规划（审批后） |
+| `PlanStatusTool.java` | `plan_status` | 查询规划状态 |
 
-### 管理 API
+## SDK 使用方式
 
-| 文件 | 说明 |
-|------|------|
-| `PlannerAdminController.java` | 管理 API（`/api/v2/planner/**`）。支持按租户查询 Plan 列表、获取 Plan 详情 |
+### 方式 1：直接使用内置策略
 
-## 规划流程
+```java
+// 使用默认策略（plan_then_execute）
+plan_create(goal="帮我查询天气")
+
+// 使用 ReAct 策略
+plan_create(goal="帮我订机票", strategy="react")
+
+// 使用 Human-in-the-Loop 策略
+plan_create(goal="帮我转账", strategy="human_in_loop")
+```
+
+### 方式 2：继承基类自定义策略
+
+```java
+public class MyReActStrategy extends ReActLoopStrategy {
+    
+    // 自定义 System Prompt
+    @Override
+    protected String buildReActSystemPrompt(List<ToolInfo> tools, PlanContext context) {
+        return "我的自定义 Prompt";
+    }
+    
+    // 自定义记忆查询（需开启 memoryEnabled）
+    @Override
+    protected List<Map<String, Object>> queryMemories(CallerIdentity identity, String goal, PlanContext context) {
+        return memoryService.query(identity, goal, "semantic");
+    }
+    
+    // 自定义记忆保存
+    @Override
+    public void saveToMemory(CallerIdentity identity, String goal, PlanContext context, boolean success) {
+        memoryService.save(identity, buildSummary(goal, context));
+    }
+}
+```
+
+## 记忆开关
 
 ```
-Agent 调用 plan_create(goal="...")
-  → PlanningEngine.createPlan()
-    → ToolAggregator.listTools()     # 获取可用工具
-    → ToolDispatcher("llm_chat")     # 调用 LLM 生成步骤
-    → 解析 LLM 返回的 JSON 步骤列表
-    → 验证每个步骤引用的 Tool 可访问
-    → 持久化 Plan
-  → 返回 Plan ID
+memoryEnabled = false (默认)
+    └─► 不查询记忆，不保存记忆
 
-Agent 调用 plan_execute(plan_id="...")
-  → PlanningEngine.executePlan()
-    → 逐步执行:
-      → ToolDispatcher.dispatchInternal(step.toolName, step.args)
-      → 记录结果到 Plan.steps
-    → 更新 Plan 状态
-  → 返回执行结果
+memoryEnabled = true
+    └─► 用户需要自己实现 queryMemories() 和 saveToMemory()
 ```
 
 ## 依赖关系
 
 - 依赖 `llm_chat` 内置工具（LLM Router 子系统）进行 LLM 调用
-- 如果 LLM 不可用，使用 fallback 策略生成简单步骤
+- 可选依赖 Memory 模块（通过 `memoryEnabled` 开关控制）

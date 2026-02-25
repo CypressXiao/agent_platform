@@ -76,7 +76,7 @@ public class McpSseSessionManager {
     public void broadcastToolsListChangedToTenant(String tenantId) {
         String notification = buildNotification("notifications/tools/list_changed", Map.of());
         Set<String> targetSessions = sessions.values().stream()
-            .filter(s -> tenantId.equals(s.identity().tenantId()))
+            .filter(s -> tenantId.equals(s.identity().getTenantId()))
             .map(SseSession::sessionId)
             .collect(Collectors.toSet());
 

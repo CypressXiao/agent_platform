@@ -42,6 +42,10 @@ public class Plan {
     @Builder.Default
     private String status = "CREATED";
 
+    @Column(name = "strategy_type")
+    @Builder.Default
+    private String strategyType = "plan_then_execute";
+
     @Column(name = "llm_model")
     private String llmModel;
 

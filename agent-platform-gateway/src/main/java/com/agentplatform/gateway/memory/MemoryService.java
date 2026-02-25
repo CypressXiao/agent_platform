@@ -62,16 +62,16 @@ public class MemoryService {
     public Map<String, Object> saveShortTerm(CallerIdentity identity, String agentId,
                                               String content, String namespace,
                                               Map<String, Object> metadata, long ttlSeconds) {
-        return shortTermStore.save(identity.tenantId(), agentId, namespace, content, metadata, ttlSeconds);
+        return shortTermStore.save(identity.getTenantId(), agentId, namespace, content, metadata, ttlSeconds);
     }
 
     public List<Map<String, Object>> queryRecent(CallerIdentity identity, String agentId,
                                                    String namespace, int limit) {
-        return shortTermStore.queryRecent(identity.tenantId(), agentId, namespace, limit);
+        return shortTermStore.queryRecent(identity.getTenantId(), agentId, namespace, limit);
     }
 
     public void clearShortTerm(CallerIdentity identity, String agentId, String namespace) {
-        shortTermStore.clear(identity.tenantId(), agentId, namespace);
+        shortTermStore.clear(identity.getTenantId(), agentId, namespace);
     }
 
     // ─── Long-term Memory (Mem0 or PG fallback) ───
@@ -79,7 +79,7 @@ public class MemoryService {
     @Transactional
     public Map<String, Object> saveLongTerm(CallerIdentity identity, String agentId, String content,
                                              String namespace, Map<String, Object> metadata, int ttlSeconds) {
-        String ownerTid = identity.tenantId();
+        String ownerTid = identity.getTenantId();
 
         if (mem0Enabled && mem0Client != null) {
             // Delegate to Mem0: LLM extraction + vectorization + Milvus storage
@@ -133,7 +133,7 @@ public class MemoryService {
 
     public Object queryLongTerm(CallerIdentity identity, String agentId, String query,
                                 String namespace, int limit) {
-        String ownerTid = identity.tenantId();
+        String ownerTid = identity.getTenantId();
 
         if (mem0Enabled && mem0Client != null) {
             // Semantic search via Mem0 → Milvus
@@ -167,7 +167,7 @@ public class MemoryService {
             MemoryEntry entry = entryRepo.findById(memoryId)
                 .orElseThrow(() -> new McpException(McpErrorCode.MEMORY_NAMESPACE_NOT_FOUND,
                     "Memory not found: " + memoryId));
-            if (!identity.tenantId().equals(entry.getOwnerTid())) {
+            if (!identity.getTenantId().equals(entry.getOwnerTid())) {
                 throw new McpException(McpErrorCode.FORBIDDEN_POLICY, "Not authorized to delete this memory");
             }
             entryRepo.deleteById(memoryId);
@@ -180,7 +180,7 @@ public class MemoryService {
     public EntityMemory saveEntity(CallerIdentity identity, String agentId,
                                     String entityType, String key, String value,
                                     Map<String, Object> metadata) {
-        String ownerTid = identity.tenantId();
+        String ownerTid = identity.getTenantId();
 
         // Upsert: update if exists, create if not
         Optional<EntityMemory> existing = entityRepo
@@ -207,7 +207,7 @@ public class MemoryService {
     }
 
     public List<EntityMemory> queryEntities(CallerIdentity identity, String agentId, String entityType) {
-        String ownerTid = identity.tenantId();
+        String ownerTid = identity.getTenantId();
         if (entityType != null && !entityType.isEmpty()) {
             return entityRepo.findByOwnerTidAndAgentIdAndEntityType(ownerTid, agentId, entityType);
         }
@@ -217,22 +217,22 @@ public class MemoryService {
     public Optional<EntityMemory> getEntity(CallerIdentity identity, String agentId,
                                              String entityType, String key) {
         return entityRepo.findByOwnerTidAndAgentIdAndEntityTypeAndEntityKey(
-            identity.tenantId(), agentId, entityType, key);
+            identity.getTenantId(), agentId, entityType, key);
     }
 
     // ─── Legacy compatibility ───
 
     public Page<MemoryEntry> list(CallerIdentity identity, String agentId, String namespace, int page, int size) {
         return entryRepo.findByOwnerTidAndAgentIdAndNamespace(
-            identity.tenantId(), agentId, namespace,
+            identity.getTenantId(), agentId, namespace,
             PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt")));
     }
 
     @Transactional
     public void clearNamespace(CallerIdentity identity, String agentId, String namespace) {
-        entryRepo.clearNamespace(identity.tenantId(), agentId, namespace);
+        entryRepo.clearNamespace(identity.getTenantId(), agentId, namespace);
         if (mem0Enabled && mem0Client != null) {
-            String userId = identity.tenantId() + ":" + agentId;
+            String userId = identity.getTenantId() + ":" + agentId;
             try {
                 mem0Client.resetMemories(userId);
             } catch (Exception e) {

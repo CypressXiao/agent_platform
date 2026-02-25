@@ -3,19 +3,18 @@ package com.agentplatform.gateway.llm;
 import com.agentplatform.common.exception.McpErrorCode;
 import com.agentplatform.common.exception.McpException;
 import com.agentplatform.common.model.CallerIdentity;
+import com.agentplatform.gateway.governance.RateLimitService;
 import com.agentplatform.gateway.mcp.upstream.VaultService;
 import com.agentplatform.gateway.llm.model.*;
 import com.agentplatform.gateway.llm.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.math.BigDecimal;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.*;
 
 /**
@@ -34,12 +33,12 @@ public class LlmRouterService {
     private final LlmUsageRecordRepository usageRepo;
     private final VaultService vault;
     private final WebClient.Builder webClientBuilder;
-    private final StringRedisTemplate redisTemplate;
+    private final RateLimitService rateLimitService;
 
     @SuppressWarnings("unchecked")
     public Map<String, Object> chat(CallerIdentity identity, String model, List<Map<String, Object>> messages,
                                      Double temperature, Integer maxTokens) {
-        String tenantId = identity.tenantId();
+        String tenantId = identity.getTenantId();
         long start = System.currentTimeMillis();
 
         // 1. Resolve model
@@ -80,24 +79,27 @@ public class LlmRouterService {
                 "Model not found or inactive: " + requestedModel));
     }
 
+    private static final int DEFAULT_RPM_LIMIT = 60;
+    private static final long RPM_WINDOW_MS = 60_000L;
+
     private void checkQuota(String tenantId, String modelId) {
-        // Check RPM via Redis sliding window
-        String rpmKey = "llm_rpm:%s:%s".formatted(tenantId, modelId);
         try {
-            Long count = redisTemplate.opsForValue().increment(rpmKey);
-            if (count != null && count == 1) {
-                redisTemplate.expire(rpmKey, Duration.ofMinutes(1));
+            // 1. 查找配额：优先模型级，其次租户级通配符
+            Optional<LlmTenantQuota> modelQuota = quotaRepo.findByTenantIdAndModelId(tenantId, modelId);
+            Optional<LlmTenantQuota> globalQuota = quotaRepo.findByTenantIdAndModelId(tenantId, "*");
+
+            // 2. 确定 RPM 限制（无配额时使用系统默认值）
+            int modelRpmLimit = modelQuota.map(LlmTenantQuota::getRpmLimit).orElse(Integer.MAX_VALUE);
+            int globalRpmLimit = globalQuota.map(LlmTenantQuota::getRpmLimit).orElse(DEFAULT_RPM_LIMIT);
+
+            // 3. 检查模型级 RPM（如果有模型级配额）— 使用 Lua 滑动窗口
+            if (modelQuota.isPresent()) {
+                rateLimitService.check(tenantId, "llm:" + modelId, modelRpmLimit, RPM_WINDOW_MS);
             }
 
-            Optional<LlmTenantQuota> quota = quotaRepo.findByTenantIdAndModelId(tenantId, modelId);
-            if (quota.isEmpty()) {
-                quota = quotaRepo.findByTenantIdAndModelId(tenantId, "*");
-            }
+            // 4. 始终检查租户级全局 RPM（不可绕过）— 使用 Lua 滑动窗口
+            rateLimitService.check(tenantId, "llm:*", globalRpmLimit, RPM_WINDOW_MS);
 
-            if (quota.isPresent() && count != null && count > quota.get().getRpmLimit()) {
-                throw new McpException(McpErrorCode.LLM_QUOTA_EXCEEDED,
-                    "RPM limit exceeded: %d/%d".formatted(count, quota.get().getRpmLimit()));
-            }
         } catch (McpException e) {
             throw e;
         } catch (Exception e) {

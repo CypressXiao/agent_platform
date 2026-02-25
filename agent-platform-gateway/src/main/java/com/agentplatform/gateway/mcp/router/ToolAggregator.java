@@ -30,9 +30,9 @@ public class ToolAggregator {
     private final GrantRepository grantRepo;
     private final PolicyEngine policyEngine;
 
-    @Cacheable(value = "toolsList", key = "#identity.tenantId()")
+    @Cacheable(value = "toolsList", key = "#identity.getTenantId()")
     public List<ToolView> listTools(CallerIdentity identity) {
-        String tenantId = identity.tenantId();
+        String tenantId = identity.getTenantId();
         List<ToolView> result = new ArrayList<>();
 
         // 1. Own tenant tools

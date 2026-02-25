@@ -39,8 +39,8 @@ public class EchoToolHandler implements BuiltinToolHandler {
         return Map.of(
             "echo", arguments.getOrDefault("message", ""),
             "caller", Map.of(
-                "tenant_id", identity.tenantId(),
-                "client_id", identity.clientId()
+                "tenant_id", identity.getTenantId(),
+                "client_id", identity.getClientId()
             ),
             "timestamp", Instant.now().toString()
         );
