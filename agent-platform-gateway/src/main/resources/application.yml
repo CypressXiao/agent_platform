@@ -1,0 +1,109 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: agent-platform-gateway
+
+  datasource:
+    url: jdbc:mysql://localhost:3306/agent_platform?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=utf8mb4
+    username: ${DB_USERNAME:agent_platform}
+    password: ${DB_PASSWORD:agent_platform}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL8Dialect
+        format_sql: true
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${OAUTH2_ISSUER_URI:https://auth.example.com}
+          jwk-set-uri: ${OAUTH2_JWK_SET_URI:https://auth.example.com/.well-known/jwks.json}
+
+  cache:
+    type: caffeine
+
+# MCP Gateway Configuration
+mcp:
+  gateway:
+    canonical-uri: ${MCP_CANONICAL_URI:https://mcp-gateway.example.com}
+    health-check-interval: 30000
+    # 认证模式开关: local = 网关自签发token, sso = 对接外部SSO授权服务器
+    auth-mode: ${MCP_AUTH_MODE:sso}
+
+# Vault Configuration
+vault:
+  enabled: ${VAULT_ENABLED:false}
+  url: ${VAULT_URL:http://localhost:8200}
+  token: ${VAULT_TOKEN:}
+
+# OPA Configuration
+opa:
+  enabled: ${OPA_ENABLED:false}
+  url: ${OPA_URL:http://localhost:8181}
+
+# Subsystem Toggles
+agent-platform:
+  workflow:
+    enabled: false
+  planner:
+    enabled: false
+  memory:
+    enabled: false
+    mem0:
+      enabled: false
+      url: ${MEM0_URL:http://localhost:8000}
+  llm-router:
+    enabled: false
+
+# Actuator & Observability
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    export:
+      prometheus:
+        enabled: true
+  tracing:
+    sampling:
+      probability: 1.0
+
+# Logging
+logging:
+  level:
+    com.agentplatform: DEBUG
+    org.springframework.security: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{traceId:-}] %-5level %logger{36} - %msg%n"
+
+# SpringDoc
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html

@@ -1,0 +1,31 @@
+## Development profile — disables JWT validation for local testing
+spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: ""
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+
+logging:
+  level:
+    com.agentplatform: DEBUG
+    org.springframework.security: DEBUG
+
+# Enable all subsystems in dev
+agent-platform:
+  workflow:
+    enabled: true
+  planner:
+    enabled: true
+  memory:
+    enabled: true
+    mem0:
+      enabled: false
+      url: http://localhost:8000
+  llm-router:
+    enabled: true

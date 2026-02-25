@@ -1,0 +1,148 @@
+version: '3.9'
+
+services:
+  # ─── MySQL ───
+  mysql:
+    image: mysql:8.0
+    container_name: agent-platform-mysql
+    environment:
+      MYSQL_DATABASE: agent_platform
+      MYSQL_USER: agent_platform
+      MYSQL_PASSWORD: agent_platform
+      MYSQL_ROOT_PASSWORD: rootpassword
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysqldata:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Redis ───
+  redis:
+    image: redis:7-alpine
+    container_name: agent-platform-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── OPA (Open Policy Agent) ───
+  opa:
+    image: openpolicyagent/opa:latest-static
+    container_name: agent-platform-opa
+    ports:
+      - "8181:8181"
+    command:
+      - "run"
+      - "--server"
+      - "--addr=0.0.0.0:8181"
+      - "/policies"
+    volumes:
+      - ./opa/policies:/policies
+
+  # ─── Agent Platform Gateway ───
+  gateway:
+    build:
+      context: .
+      dockerfile: agent-platform-gateway/Dockerfile
+    container_name: agent-platform-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      DB_USERNAME: agent_platform
+      DB_PASSWORD: agent_platform
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/agent_platform?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=utf8mb4
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      OPA_ENABLED: "true"
+      OPA_URL: http://opa:8181
+      VAULT_ENABLED: "false"
+      MEM0_URL: http://mem0:8000
+      # Override JWT settings for local dev (disable JWT validation)
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: ""
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      opa:
+        condition: service_started
+
+  # ─── Milvus (Vector Database) ───
+  milvus-etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    container_name: milvus-etcd
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    volumes:
+      - milvus-etcd-data:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+
+  milvus-minio:
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    container_name: milvus-minio
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    ports:
+      - "9001:9001"
+    volumes:
+      - milvus-minio-data:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  milvus:
+    image: milvusdb/milvus:v2.4.4
+    container_name: agent-platform-milvus
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    environment:
+      ETCD_ENDPOINTS: milvus-etcd:2379
+      MINIO_ADDRESS: milvus-minio:9000
+    depends_on:
+      - milvus-etcd
+      - milvus-minio
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    volumes:
+      - milvus-data:/var/lib/milvus
+
+  # ─── Mem0 (AI Memory Service) ───
+  mem0:
+    image: mem0/mem0:latest
+    container_name: agent-platform-mem0
+    ports:
+      - "8000:8000"
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-placeholder}
+      MEM0_VECTOR_STORE_PROVIDER: milvus
+      MEM0_VECTOR_STORE_URL: http://milvus:19530
+      MEM0_VECTOR_STORE_COLLECTION_NAME: agent_platform_memory
+      MEM0_VECTOR_STORE_EMBEDDING_MODEL_DIMS: "1536"
+    depends_on:
+      milvus:
+        condition: service_healthy
+
+volumes:
+  mysqldata:
+  milvus-etcd-data:
+  milvus-minio-data:
+  milvus-data:
