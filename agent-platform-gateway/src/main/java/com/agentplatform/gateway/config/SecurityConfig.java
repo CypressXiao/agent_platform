@@ -12,6 +12,9 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jose.jws.SignatureAlgorithm;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -38,6 +41,9 @@ public class SecurityConfig {
     @Value("${mcp.gateway.canonical-uri:https://mcp-gateway.example.com}")
     private String canonicalUri;
 
+    @Value("${mcp.gateway.cors.allowed-origins:}")
+    private String allowedOrigins;
+
     @Autowired(required = false)
     private JWKSource<SecurityContext> jwkSource;
 
@@ -47,6 +53,7 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
+            .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             .csrf(AbstractHttpConfigurer::disable)
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
@@ -56,6 +63,7 @@ public class SecurityConfig {
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
                 .requestMatchers("/oauth2/**").permitAll()
                 .requestMatchers("/mcp/v1/**").authenticated()
+                .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/v1/admin/audit/**").hasAnyAuthority("SCOPE_mcp:tools-admin", "SCOPE_mcp:audit-read")
                 .requestMatchers("/api/v1/admin/**").hasAuthority("SCOPE_mcp:tools-admin")
                 .anyRequest().authenticated()
             )
@@ -84,8 +92,28 @@ public class SecurityConfig {
         return http.build();
     }
 
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration config = new CorsConfiguration();
+        if (allowedOrigins != null && !allowedOrigins.isBlank()) {
+            config.setAllowedOrigins(Arrays.asList(allowedOrigins.split(",")));
+        } else {
+            config.setAllowedOrigins(List.of()); // deny all cross-origin by default
+        }
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        config.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Request-ID"));
+        config.setExposedHeaders(List.of("WWW-Authenticate", "X-Request-ID"));
+        config.setAllowCredentials(true);
+        config.setMaxAge(3600L);
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", config);
+        return source;
+    }
+
     private JwtDecoder localJwtDecoder() {
-        return NimbusJwtDecoder.withJwkSource(jwkSource)
+        // 本地模式：使用网关自身的 JWKS 端点验证 token
+        return NimbusJwtDecoder.withJwkSetUri(canonicalUri + "/oauth2/jwks")
             .jwsAlgorithm(SignatureAlgorithm.RS256)
             .build();
     }

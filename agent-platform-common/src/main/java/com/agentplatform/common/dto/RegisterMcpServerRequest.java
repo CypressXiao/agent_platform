@@ -12,6 +12,7 @@ public class RegisterMcpServerRequest {
     private String serverId;
     @NotBlank
     private String baseUrl;
+    private String sseEndpoint;
     private String transport = "streamable_http";
     private Map<String, Object> authProfile;
     @NotBlank

@@ -51,6 +51,17 @@ mcp:
     health-check-interval: 30000
     # 认证模式开关: local = 网关自签发token, sso = 对接外部SSO授权服务器
     auth-mode: ${MCP_AUTH_MODE:sso}
+    # CORS 允许的来源（逗号分隔），留空则拒绝所有跨域请求
+    cors:
+      allowed-origins: ${MCP_CORS_ALLOWED_ORIGINS:}
+    # JWK 密钥配置（仅 local 模式生效）
+    jwk:
+      # 显式指定 keystore 文件路径（生产环境推荐挂载 Volume 或从 Vault 加载）
+      keystore-path: ${MCP_JWK_KEYSTORE_PATH:}
+      keystore-password: ${MCP_JWK_KEYSTORE_PASSWORD:changeit}
+      key-alias: ${MCP_JWK_KEY_ALIAS:mcp-gateway-key}
+      # 未配置 keystore-path 时，首次启动自动生成并持久化到此路径
+      auto-generate-path: ${MCP_JWK_AUTO_GENERATE_PATH:data/mcp-gateway-keystore.p12}
 
 # Vault Configuration
 vault:

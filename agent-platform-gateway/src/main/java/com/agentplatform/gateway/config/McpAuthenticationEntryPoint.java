@@ -25,7 +25,7 @@ public class McpAuthenticationEntryPoint implements AuthenticationEntryPoint {
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         response.setContentType("application/json");
         response.setHeader("WWW-Authenticate",
-            "Bearer resource_metadata=\"" + canonicalUri + "/.well-known/oauth-protected-resource\"");
+            "Bearer realm=\"mcp\", resource_metadata=\"" + canonicalUri + "/.well-known/oauth-protected-resource\"");
 
         Map<String, Object> body = Map.of(
             "error", Map.of(

@@ -41,6 +41,9 @@ public class UpstreamServer {
     @Column(name = "health_endpoint")
     private String healthEndpoint;
 
+    @Column(name = "sse_endpoint")
+    private String sseEndpoint;
+
     @Column(name = "owner_tid", nullable = false)
     private String ownerTid;
 

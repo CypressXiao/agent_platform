@@ -42,9 +42,9 @@ public class McpProxyService {
         );
 
         // Get upstream auth token (MUST NOT pass through caller's token)
-        String authHeader = tokenExchange.getUpstreamAuth(identity, server);
+        TokenExchangeService.AuthHeader authHeader = tokenExchange.getUpstreamAuth(identity, server);
 
-        String mcpEndpoint = resolveMcpEndpoint(server);
+        String mcpEndpoint = server.getBaseUrl();
         int timeoutMs = tool.getTimeoutMs() != null ? tool.getTimeoutMs() : 30000;
 
         try {
@@ -53,7 +53,7 @@ public class McpProxyService {
                 .uri(mcpEndpoint);
 
             if (authHeader != null) {
-                spec = (WebClient.RequestBodySpec) spec.header("Authorization", authHeader);
+                spec = (WebClient.RequestBodySpec) spec.header(authHeader.headerName(), authHeader.headerValue());
             }
 
             Map<String, Object> response = spec
@@ -89,11 +89,4 @@ public class McpProxyService {
         }
     }
 
-    private String resolveMcpEndpoint(UpstreamServer server) {
-        String baseUrl = server.getBaseUrl();
-        if (baseUrl.endsWith("/mcp")) {
-            return baseUrl;
-        }
-        return baseUrl + "/mcp";
-    }
 }

@@ -2,6 +2,7 @@ package com.agentplatform.common.repository;
 
 import com.agentplatform.common.model.Tool;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -25,4 +26,8 @@ public interface ToolRepository extends JpaRepository<Tool, String> {
 
     @Query("SELECT t FROM Tool t WHERE t.status = 'active' AND t.ownerTid = 'system'")
     List<Tool> findSystemTools();
+
+    @Modifying
+    @org.springframework.transaction.annotation.Transactional
+    void deleteBySourceId(String sourceId);
 }

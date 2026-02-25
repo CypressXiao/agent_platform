@@ -47,14 +47,39 @@ public class PolicyEngine {
 
             Map<String, Object> request = Map.of("input", input);
 
-            Map<String, Object> result = opaClient.post()
+            // Check allow rule
+            Map<String, Object> allowResult = opaClient.post()
                 .uri("/v1/data/authz/allow")
                 .bodyValue(request)
                 .retrieve()
                 .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
                 .block(java.time.Duration.ofSeconds(2));
 
-            return result != null && Boolean.TRUE.equals(result.get("result"));
+            boolean allowed = allowResult != null && Boolean.TRUE.equals(allowResult.get("result"));
+
+            if (!allowed) {
+                return false;
+            }
+
+            // Check deny rule — deny takes precedence over allow
+            try {
+                Map<String, Object> denyResult = opaClient.post()
+                    .uri("/v1/data/authz/deny")
+                    .bodyValue(request)
+                    .retrieve()
+                    .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
+                    .block(java.time.Duration.ofSeconds(2));
+
+                boolean denied = denyResult != null && Boolean.TRUE.equals(denyResult.get("result"));
+                if (denied) {
+                    log.info("OPA deny rule matched for actor={}, tool={}", identity.tenantId(), tool.getToolName());
+                    return false;
+                }
+            } catch (Exception e) {
+                log.debug("OPA deny evaluation failed (treating as no deny): {}", e.getMessage());
+            }
+
+            return true;
         } catch (Exception e) {
             log.warn("OPA evaluation failed, falling back to local policy: {}", e.getMessage());
             return evaluateLocal(identity, tool);

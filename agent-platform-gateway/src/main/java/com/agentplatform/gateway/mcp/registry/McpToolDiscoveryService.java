@@ -2,6 +2,7 @@ package com.agentplatform.gateway.mcp.registry;
 
 import com.agentplatform.common.model.Tool;
 import com.agentplatform.common.model.UpstreamServer;
+import com.agentplatform.gateway.mcp.upstream.TokenExchangeService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -18,10 +19,11 @@ import java.util.*;
 public class McpToolDiscoveryService {
 
     private final WebClient.Builder webClientBuilder;
+    private final TokenExchangeService tokenExchange;
 
     @SuppressWarnings("unchecked")
     public List<Tool> discoverTools(UpstreamServer server) {
-        WebClient client = webClientBuilder.baseUrl(server.getBaseUrl()).build();
+        WebClient client = webClientBuilder.build();
 
         Map<String, Object> request = Map.of(
             "jsonrpc", "2.0",
@@ -30,10 +32,19 @@ public class McpToolDiscoveryService {
             "params", Map.of()
         );
 
+        // Get upstream auth if configured (supports both authenticated and unauthenticated MCP servers)
+        TokenExchangeService.AuthHeader authHeader = tokenExchange.getUpstreamAuth(null, server);
+
         Map<String, Object> response;
         try {
-            response = client.post()
-                .uri("/mcp")
+            WebClient.RequestBodySpec spec = client.post()
+                .uri(server.getBaseUrl());
+            
+            if (authHeader != null) {
+                spec = (WebClient.RequestBodySpec) spec.header(authHeader.headerName(), authHeader.headerValue());
+            }
+            
+            response = spec
                 .bodyValue(request)
                 .retrieve()
                 .bodyToMono(Map.class)

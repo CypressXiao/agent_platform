@@ -6,9 +6,11 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
@@ -30,10 +32,12 @@ import java.util.*;
 @RequestMapping("/api/v1/admin/oauth2-clients")
 @RequiredArgsConstructor
 @ConditionalOnProperty(name = "mcp.gateway.auth-mode", havingValue = "local")
+@Slf4j
 public class OAuth2ClientAdminController {
 
     private final RegisteredClientRepository registeredClientRepository;
     private final TenantRepository tenantRepository;
+    private final JdbcTemplate jdbcTemplate;
     private final PasswordEncoder passwordEncoder = PasswordEncoderFactories.createDelegatingPasswordEncoder();
 
     /**
@@ -119,7 +123,8 @@ public class OAuth2ClientAdminController {
     }
 
     /**
-     * 删除（吊销）一个客户端
+     * 删除（吊销）一个客户端。
+     * 同时删除该客户端已签发的所有授权记录和同意记录，并停用对应租户。
      */
     @DeleteMapping("/{clientId}")
     public ResponseEntity<Void> deleteClient(@PathVariable String clientId) {
@@ -127,10 +132,69 @@ public class OAuth2ClientAdminController {
         if (client == null) {
             return ResponseEntity.notFound().build();
         }
-        // JdbcRegisteredClientRepository 没有 delete 方法，通过覆盖写入空 scope 来禁用
-        // 实际生产中可以直接操作数据库或扩展 Repository
-        // 这里我们直接用 JDBC 删除
+
+        String registeredClientId = client.getId();
+
+        // 删除已签发的授权记录
+        jdbcTemplate.update("DELETE FROM oauth2_authorization WHERE registered_client_id = ?", registeredClientId);
+        // 删除授权同意记录
+        jdbcTemplate.update("DELETE FROM oauth2_authorization_consent WHERE registered_client_id = ?", registeredClientId);
+        // 删除客户端注册记录
+        jdbcTemplate.update("DELETE FROM oauth2_registered_client WHERE id = ?", registeredClientId);
+
+        // 停用对应租户
+        tenantRepository.findById(clientId).ifPresent(tenant -> {
+            tenant.setStatus("inactive");
+            tenantRepository.save(tenant);
+        });
+
+        log.info("Deleted OAuth2 client and deactivated tenant: {}", clientId);
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * 轮换客户端密钥。生成新 secret 并返回（明文仅展示一次），旧 secret 立即失效。
+     */
+    @PostMapping("/{clientId}/rotate-secret")
+    public ResponseEntity<ClientResponse> rotateClientSecret(@PathVariable String clientId) {
+        RegisteredClient existing = registeredClientRepository.findByClientId(clientId);
+        if (existing == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        String rawSecret = UUID.randomUUID().toString().replace("-", "");
+
+        // 用原有配置重建客户端，仅替换 secret
+        RegisteredClient.Builder builder = RegisteredClient.withId(existing.getId())
+            .clientId(existing.getClientId())
+            .clientSecret(passwordEncoder.encode(rawSecret))
+            .clientName(existing.getClientName())
+            .clientIdIssuedAt(existing.getClientIdIssuedAt());
+
+        existing.getClientAuthenticationMethods().forEach(builder::clientAuthenticationMethod);
+        existing.getAuthorizationGrantTypes().forEach(builder::authorizationGrantType);
+        existing.getScopes().forEach(builder::scope);
+        if (existing.getTokenSettings() != null) {
+            builder.tokenSettings(existing.getTokenSettings());
+        }
+        if (existing.getClientSettings() != null) {
+            builder.clientSettings(existing.getClientSettings());
+        }
+
+        RegisteredClient updated = builder.build();
+        registeredClientRepository.save(updated);
+
+        log.info("Rotated client secret for: {}", clientId);
+
+        ClientResponse response = new ClientResponse();
+        response.setId(updated.getId());
+        response.setClientId(updated.getClientId());
+        response.setClientSecret(rawSecret);
+        response.setClientName(updated.getClientName());
+        response.setScopes(new ArrayList<>(updated.getScopes()));
+        response.setMessage("密钥已轮换，请妥善保存新 clientSecret，此值仅展示一次");
+
+        return ResponseEntity.ok(response);
     }
 
     // ---- Request / Response DTOs ----

@@ -16,6 +16,10 @@ import java.util.function.Supplier;
 /**
  * MCP Protocol Handler — JSON-RPC 2.0 endpoint.
  * Handles tools/list, tools/call, ping, and initialize methods.
+ * 
+ * 支持两种模式：
+ * 1. SSE 模式：通过 /mcp/v1/sse 建立长连接，服务端主动推送 tools/list_changed
+ * 2. HTTP 模式：通过 POST /mcp/v1 调用，响应中包含 _meta.version 供客户端判断是否需要刷新
  */
 @RestController
 @RequestMapping("/mcp/v1")
@@ -27,6 +31,7 @@ public class McpProtocolHandler {
     private final ToolDispatcher toolDispatcher;
     private final Supplier<CallerIdentity> callerIdentityExtractor;
     private final ObjectMapper objectMapper;
+    private final ToolVersionService toolVersionService;
 
     @PostMapping
     @SuppressWarnings("unchecked")
@@ -119,6 +124,13 @@ public class McpProtocolHandler {
         if (cursor != null) {
             result.put("nextCursor", null);
         }
+
+        // HTTP 模式：返回版本号，客户端可缓存并在下次请求时比对
+        // 如果版本号变化，说明工具列表有更新
+        result.put("_meta", Map.of(
+            "version", toolVersionService.getCurrentVersion(),
+            "hint", "Cache this version. If it changes on next call, tools have been updated."
+        ));
 
         return result;
     }

@@ -17,6 +17,8 @@ public interface UpstreamServerRepository extends JpaRepository<UpstreamServer, 
 
     List<UpstreamServer> findByServerType(String serverType);
 
+    List<UpstreamServer> findByServerTypeAndHealthStatus(String serverType, String healthStatus);
+
     @Modifying
     @Query("UPDATE UpstreamServer s SET s.healthStatus = :status, s.lastHealthCheck = :now WHERE s.serverId = :serverId")
     void updateHealthStatus(@Param("serverId") String serverId,

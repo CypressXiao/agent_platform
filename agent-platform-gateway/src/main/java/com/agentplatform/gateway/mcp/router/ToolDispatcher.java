@@ -81,17 +81,17 @@ public class ToolDispatcher {
 
             // 8. Audit
             long latency = System.currentTimeMillis() - start;
-            auditLog.logSuccess(identity, tool, grantId, latency);
+            auditLog.logSuccess(identity, tool, grantId, latency, arguments, result);
 
             return result;
 
         } catch (McpException e) {
             long latency = System.currentTimeMillis() - start;
-            auditLog.logFailure(identity, toolName, grantId, e.getErrorCode().getCode(), latency);
+            auditLog.logFailure(identity, toolName, grantId, e.getErrorCode().getCode(), latency, arguments);
             throw e;
         } catch (Exception e) {
             long latency = System.currentTimeMillis() - start;
-            auditLog.logFailure(identity, toolName, grantId, "INTERNAL_ERROR", latency);
+            auditLog.logFailure(identity, toolName, grantId, "INTERNAL_ERROR", latency, arguments);
             throw new McpException(McpErrorCode.INTERNAL_ERROR, "Tool execution failed: " + e.getMessage(), e);
         }
     }

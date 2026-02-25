@@ -21,6 +21,11 @@ import java.util.Map;
 @Slf4j
 public class TokenExchangeService {
 
+    /**
+     * Represents an HTTP header for upstream authentication.
+     */
+    public record AuthHeader(String headerName, String headerValue) {}
+
     private final VaultService vault;
     private final WebClient.Builder webClientBuilder;
     private final StringRedisTemplate redisTemplate;
@@ -28,10 +33,11 @@ public class TokenExchangeService {
     private static final Duration TOKEN_CACHE_TTL = Duration.ofMinutes(50);
 
     /**
-     * Get the appropriate authorization header value for an upstream server.
+     * Get the appropriate authorization header for an upstream server.
+     * Returns AuthHeader containing both header name and value.
      */
     @SuppressWarnings("unchecked")
-    public String getUpstreamAuth(CallerIdentity identity, UpstreamServer server) {
+    public AuthHeader getUpstreamAuth(CallerIdentity identity, UpstreamServer server) {
         Map<String, Object> authProfile = server.getAuthProfile();
         if (authProfile == null || authProfile.isEmpty()) {
             return null;
@@ -46,9 +52,10 @@ public class TokenExchangeService {
             case "api_key" -> {
                 String keyRef = (String) authProfile.get("api_key_ref");
                 String apiKey = vault.getCredential(keyRef);
-                String header = (String) authProfile.getOrDefault("header", "Authorization");
+                String headerName = (String) authProfile.getOrDefault("header", "Authorization");
                 String prefix = (String) authProfile.getOrDefault("prefix", "Bearer");
-                yield prefix + " " + apiKey;
+                String headerValue = prefix.isEmpty() ? apiKey : prefix + " " + apiKey;
+                yield new AuthHeader(headerName, headerValue);
             }
             case "basic" -> {
                 String usernameRef = (String) authProfile.get("username_ref");
@@ -57,13 +64,15 @@ public class TokenExchangeService {
                 String password = vault.getCredential(passwordRef);
                 String encoded = java.util.Base64.getEncoder()
                     .encodeToString((username + ":" + password).getBytes());
-                yield "Basic " + encoded;
+                yield new AuthHeader("Authorization", "Basic " + encoded);
             }
             case "client_credentials" -> {
-                yield exchangeClientCredentials(server, authProfile);
+                String token = exchangeClientCredentials(server, authProfile);
+                yield token != null ? new AuthHeader("Authorization", token) : null;
             }
             case "oauth2_token_exchange" -> {
-                yield exchangeOAuth2Token(identity, server, authProfile);
+                String token = exchangeOAuth2Token(identity, server, authProfile);
+                yield token != null ? new AuthHeader("Authorization", token) : null;
             }
             default -> {
                 log.warn("Unknown auth type for server {}: {}", server.getServerId(), authType);

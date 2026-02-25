@@ -28,7 +28,7 @@ public class ProtectedResourceMetadataController {
         return Map.of(
             "resource", canonicalUri,
             "authorization_servers", List.of(authServer),
-            "scopes_supported", List.of("mcp:tools-basic", "mcp:tools-admin"),
+            "scopes_supported", List.of("mcp:tools-basic", "mcp:tools-admin", "mcp:audit-read"),
             "bearer_methods_supported", List.of("header")
         );
     }

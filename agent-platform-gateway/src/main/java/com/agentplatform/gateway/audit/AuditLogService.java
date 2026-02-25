@@ -12,7 +12,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Instant;
+import java.util.HexFormat;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -49,6 +52,12 @@ public class AuditLogService {
 
     @Async
     public void logSuccess(CallerIdentity identity, Tool tool, String grantId, long latencyMs) {
+        logSuccess(identity, tool, grantId, latencyMs, null, null);
+    }
+
+    @Async
+    public void logSuccess(CallerIdentity identity, Tool tool, String grantId, long latencyMs,
+                           Map<String, Object> requestArgs, Object responseResult) {
         toolCallCounter.increment();
         toolCallTimer.record(latencyMs, TimeUnit.MILLISECONDS);
 
@@ -66,6 +75,8 @@ public class AuditLogService {
             .action("tools/call")
             .resultCode("SUCCESS")
             .latencyMs(latencyMs)
+            .requestDigest(computeDigest(requestArgs))
+            .responseDigest(computeDigest(responseResult))
             .metadata(Map.of("source_type", tool.getSourceType()))
             .build();
 
@@ -79,6 +90,12 @@ public class AuditLogService {
     @Async
     public void logFailure(CallerIdentity identity, String toolName, String grantId,
                            String errorCode, long latencyMs) {
+        logFailure(identity, toolName, grantId, errorCode, latencyMs, null);
+    }
+
+    @Async
+    public void logFailure(CallerIdentity identity, String toolName, String grantId,
+                           String errorCode, long latencyMs, Map<String, Object> requestArgs) {
         toolCallCounter.increment();
         toolCallErrorCounter.increment();
         toolCallTimer.record(latencyMs, TimeUnit.MILLISECONDS);
@@ -94,6 +111,7 @@ public class AuditLogService {
             .action("tools/call")
             .resultCode(errorCode)
             .latencyMs(latencyMs)
+            .requestDigest(computeDigest(requestArgs))
             .build();
 
         try {
@@ -130,5 +148,23 @@ public class AuditLogService {
             return tracer.currentSpan().context().traceId();
         }
         return UUID.randomUUID().toString();
+    }
+
+    /**
+     * 计算请求/响应内容的 SHA-256 摘要，用于合规审计（不存储原始数据）。
+     */
+    private String computeDigest(Object data) {
+        if (data == null) {
+            return null;
+        }
+        try {
+            String json = data.toString();
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(json.getBytes(StandardCharsets.UTF_8));
+            return "sha256:" + HexFormat.of().formatHex(hash);
+        } catch (Exception e) {
+            log.debug("Failed to compute digest: {}", e.getMessage());
+            return null;
+        }
     }
 }

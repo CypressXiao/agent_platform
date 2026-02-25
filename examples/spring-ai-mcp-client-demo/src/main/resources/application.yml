@@ -1,0 +1,37 @@
+server:
+  port: 8081
+
+# MCP Gateway 配置
+mcp:
+  gateway:
+    # MCP Gateway 的地址
+    url: ${MCP_GATEWAY_URL:http://localhost:8080}
+
+# Spring Security OAuth2 Client 配置
+# 这里配置 client_credentials 模式，Spring 会自动处理 Token 获取和刷新
+spring:
+  security:
+    oauth2:
+      client:
+        registration:
+          # 注册一个名为 "mcp-gateway" 的 OAuth2 Client
+          mcp-gateway:
+            # 授权类型：client_credentials（M2M 模式）
+            authorization-grant-type: client_credentials
+            # Client ID 和 Secret（从 Gateway 管理员处获取）
+            client-id: ${MCP_CLIENT_ID:demo-agent}
+            client-secret: ${MCP_CLIENT_SECRET:demo-secret}
+            # 请求的 scope
+            scope: mcp:tools-basic
+            # 指向哪个 provider
+            provider: mcp-gateway
+        provider:
+          # 定义 mcp-gateway provider
+          mcp-gateway:
+            # Token 端点（Gateway 的 /oauth2/token）
+            token-uri: ${MCP_GATEWAY_URL:http://localhost:8080}/oauth2/token
+
+logging:
+  level:
+    org.springframework.security: DEBUG
+    org.springframework.web.reactive: DEBUG

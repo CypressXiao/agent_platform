@@ -2,6 +2,7 @@ package com.agentplatform.gateway.admin;
 
 import com.agentplatform.common.model.Tool;
 import com.agentplatform.common.repository.ToolRepository;
+import com.agentplatform.gateway.mcp.ToolVersionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -15,6 +16,7 @@ import java.util.List;
 public class ToolAdminController {
 
     private final ToolRepository toolRepo;
+    private final ToolVersionService toolVersionService;
 
     @GetMapping
     public ResponseEntity<List<Tool>> listTools(
@@ -42,7 +44,10 @@ public class ToolAdminController {
             .map(tool -> {
                 tool.setStatus("disabled");
                 tool.setUpdatedAt(Instant.now());
-                return ResponseEntity.ok(toolRepo.save(tool));
+                Tool saved = toolRepo.save(tool);
+                // 递增版本号并通知所有连接的客户端
+                toolVersionService.incrementVersion();
+                return ResponseEntity.ok(saved);
             })
             .orElse(ResponseEntity.notFound().build());
     }
@@ -53,7 +58,10 @@ public class ToolAdminController {
             .map(tool -> {
                 tool.setStatus("active");
                 tool.setUpdatedAt(Instant.now());
-                return ResponseEntity.ok(toolRepo.save(tool));
+                Tool saved = toolRepo.save(tool);
+                // 递增版本号并通知所有连接的客户端
+                toolVersionService.incrementVersion();
+                return ResponseEntity.ok(saved);
             })
             .orElse(ResponseEntity.notFound().build());
     }

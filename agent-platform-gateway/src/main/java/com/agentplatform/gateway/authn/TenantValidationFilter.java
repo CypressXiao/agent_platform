@@ -2,11 +2,12 @@ package com.agentplatform.gateway.authn;
 
 import com.agentplatform.common.repository.TenantRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -17,20 +18,37 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 租户验证过滤器。
  * 在 JWT 验签通过后，从 token 中提取 client_id 作为租户标识，
  * 校验该租户是否存在且状态为 active。
  * 不合法的租户直接返回 403。
+ * 使用本地 Caffeine 缓存避免每次请求查询数据库。
  */
 @Component
-@RequiredArgsConstructor
 @Slf4j
 public class TenantValidationFilter extends OncePerRequestFilter {
 
     private final TenantRepository tenantRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    private final Cache<String, Boolean> tenantCache = Caffeine.newBuilder()
+        .expireAfterWrite(10, TimeUnit.SECONDS)
+        .maximumSize(10_000)
+        .build();
+
+    public TenantValidationFilter(TenantRepository tenantRepository) {
+        this.tenantRepository = tenantRepository;
+    }
+
+    /**
+     * 手动使某个租户的缓存失效（供租户状态变更时调用）。
+     */
+    public void evictTenant(String tenantId) {
+        tenantCache.invalidate(tenantId);
+    }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -56,8 +74,10 @@ public class TenantValidationFilter extends OncePerRequestFilter {
             return;
         }
 
-        // 校验 client_id 对应的租户是否存在且状态为 active
-        boolean valid = tenantRepository.findByTidAndStatus(clientId, "active").isPresent();
+        // 校验 client_id 对应的租户是否存在且状态为 active（带本地缓存）
+        final String tenantId = clientId;
+        boolean valid = Boolean.TRUE.equals(
+            tenantCache.get(tenantId, key -> tenantRepository.findByTidAndStatus(key, "active").isPresent()));
 
         if (!valid) {
             log.warn("Tenant validation failed: client_id={}, uri={}", clientId, request.getRequestURI());

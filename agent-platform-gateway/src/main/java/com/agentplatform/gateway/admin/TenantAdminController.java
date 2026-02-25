@@ -2,6 +2,7 @@ package com.agentplatform.gateway.admin;
 
 import com.agentplatform.common.model.Tenant;
 import com.agentplatform.common.repository.TenantRepository;
+import com.agentplatform.gateway.authn.TenantValidationFilter;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -16,6 +17,7 @@ import java.util.List;
 public class TenantAdminController {
 
     private final TenantRepository tenantRepo;
+    private final TenantValidationFilter tenantValidationFilter;
 
     @PostMapping
     public ResponseEntity<Tenant> createTenant(@Valid @RequestBody Tenant tenant) {
@@ -41,7 +43,10 @@ public class TenantAdminController {
                 if (update.getName() != null) existing.setName(update.getName());
                 if (update.getStatus() != null) existing.setStatus(update.getStatus());
                 if (update.getQuotaConfig() != null) existing.setQuotaConfig(update.getQuotaConfig());
-                return ResponseEntity.ok(tenantRepo.save(existing));
+                Tenant saved = tenantRepo.save(existing);
+                // 状态变更时立即使缓存失效
+                tenantValidationFilter.evictTenant(tid);
+                return ResponseEntity.ok(saved);
             })
             .orElse(ResponseEntity.notFound().build());
     }

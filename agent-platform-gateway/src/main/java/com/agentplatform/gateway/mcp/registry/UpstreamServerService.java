@@ -32,6 +32,7 @@ public class UpstreamServerService {
             .serverId(request.getServerId())
             .serverType("mcp")
             .baseUrl(request.getBaseUrl())
+            .sseEndpoint(request.getSseEndpoint())
             .transport(request.getTransport())
             .authProfile(request.getAuthProfile())
             .ownerTid(request.getOwnerTid())
