@@ -76,10 +76,14 @@ opa:
 
 # Subsystem Toggles
 agent-platform:
-  workflow:
+  prompt:
     enabled: false
-  planner:
+  vector:
     enabled: false
+    milvus:
+      host: ${MILVUS_HOST:localhost}
+      port: ${MILVUS_PORT:19530}
+      collection: agent_platform_vectors
   memory:
     enabled: false
     mem0:
@@ -87,6 +91,22 @@ agent-platform:
       url: ${MEM0_URL:http://localhost:8000}
   llm-router:
     enabled: false
+  rag:
+    # RAG 配置
+    reranker:
+      enabled: ${RAG_RERANKER_ENABLED:true}
+      provider: ${RAG_RERANKER_PROVIDER:local}  # local, cohere, bge-api
+      api-url: ${RAG_RERANKER_API_URL:}
+      api-key: ${RAG_RERANKER_API_KEY:}
+    context-completion:
+      enabled: ${RAG_CONTEXT_COMPLETION_ENABLED:true}
+      window-size: ${RAG_CONTEXT_COMPLETION_WINDOW_SIZE:1}
+    graph:
+      enabled: ${RAG_GRAPH_ENABLED:false}
+      provider: ${RAG_GRAPH_PROVIDER:memory}  # memory, neo4j
+      neo4j-url: ${RAG_GRAPH_NEO4J_URL:}
+      neo4j-user: ${RAG_GRAPH_NEO4J_USER:}
+      neo4j-password: ${RAG_GRAPH_NEO4J_PASSWORD:}
 
 # Actuator & Observability
 management:

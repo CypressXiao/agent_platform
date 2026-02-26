@@ -1,22 +1,36 @@
-# Agent Platform — Agent 中台
+# Agent Platform — Agent 能力网关
 
-面向多租户的 **Agent 基础设施中台**，为上层 Agent 应用提供统一的 MCP 协议网关、LLM 接入、记忆管理、任务规划、工作流编排等核心能力，并以认证授权、治理、审计作为贯穿所有模块的共享基础设施。
+面向多租户的 **Agent 能力网关**，为上层 Agent 服务提供统一的能力入口，包括 LLM 接入、向量存储/RAG、Prompt 管理、记忆管理等核心能力，并以认证授权、治理、审计、Tracing 作为贯穿所有模块的共享基础设施。
+
+> **定位**: 本平台是 **for Agent 服务** 的能力网关，不是 for 用户的。Agent 编排逻辑（如 Planner、Workflow）由上层 Agent 应用使用 Spring AI Alibaba 等框架实现。
+>
+> **Gateway 的含义**: 不仅仅是 MCP 协议网关，而是 Agent 服务调用各种能力的统一入口。MCP 只是协议之一，所有能力调用都需要认证。
+
+## 📚 文档
+
+| 文档 | 说明 |
+|------|------|
+| [**能力说明**](docs/capabilities.md) | 平台核心能力详细说明 |
+| [部署指南](docs/deployment.md) | Docker Compose 部署、环境变量配置 |
+| [API 使用指南](docs/api-guide.md) | REST API 和 MCP 协议调用示例 |
+| [Swagger UI](http://localhost:8080/swagger-ui.html) | 在线 API 文档（需启动服务） |
 
 ---
 
 ## 定位与设计理念
 
-本项目不是一个单一的 MCP 网关，而是一个 **Agent 中台**：
+本项目是一个 **Agent 能力网关**：
 
-- **认证授权、治理、审计** 是所有业务模块共用的横切基础设施
-- **MCP 网关、LLM 路由、记忆服务、任务规划、工作流编排** 是同一层级的业务模块，各自独立、按需启用
-- 所有业务模块通过统一的 Tool 体系互联互通（例如 Planner 可调用 LLM Tool，Workflow 可编排任意 Tool）
+- **认证授权、治理、审计、Tracing** 是所有业务模块共用的横切基础设施
+- **MCP 网关、LLM 路由、向量存储/RAG、Prompt 管理、记忆服务** 是同一层级的业务模块，各自独立、按需启用
+- 平台的价值在于 **基础能力 + 封装能力**，将复杂的多步骤操作（如 Embedding + 存储）封装为简单的高层 Tool
 
 ## 架构概览
 
 ```
-                        Agent / MCP Client
+                     Agent 服务 (使用 Spring AI Alibaba 等框架)
                               │
+                              │ 调用 MCP Tool
                               ▼
 ┌──────────────────────────────────────────────────────────────┐
 │                    Agent 中台 (agent-platform)                │
@@ -25,22 +39,23 @@
 │  │  认证 (OAuth 2.1 / JWT)  │  授权 (OPA + Grant Engine)  │  │
 │  │  治理 (限流 / 熔断)       │  审计 (全量日志 + Metrics)   │  │
 │  │  密钥管理 (Vault)         │  多租户隔离                  │  │
+│  │  Tracing (OpenTelemetry)  │                              │  │
 │  └─────────────────────────────────────────────────────────┘  │
 │                                                              │
 │  ┌──────────────── 业务模块层 (同级，按需启用) ───────────┐  │
 │  │                                                        │  │
 │  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐  │  │
-│  │  │ MCP 网关  │ │ LLM 路由 │ │ 记忆服务  │ │ 任务规划  │  │  │
-│  │  │          │ │          │ │          │ │          │  │  │
-│  │  │ 协议处理  │ │ 多供应商  │ │ 短期记忆  │ │ 目标分解  │  │  │
-│  │  │ Tool聚合  │ │ 模型路由  │ │ 长期记忆  │ │ 步骤执行  │  │  │
-│  │  │ Tool分发  │ │ 配额计费  │ │ 结构化    │ │ LLM驱动  │  │  │
-│  │  │ 上游代理  │ │ 降级容错  │ │ 语义检索  │ │          │  │  │
+│  │  │ MCP 网关  │ │ LLM 路由 │ │ 向量/RAG  │ │ Prompt   │  │  │
+│  │  │          │ │          │ │          │ │ 管理     │  │  │
+│  │  │ 协议处理  │ │ 多供应商  │ │ Embedding│ │ 模板存储  │  │  │
+│  │  │ Tool聚合  │ │ 模型路由  │ │ 向量存储  │ │ 版本管理  │  │  │
+│  │  │ Tool分发  │ │ 配额计费  │ │ 相似检索  │ │ 变量渲染  │  │  │
+│  │  │ 上游代理  │ │ 降级容错  │ │ RAG查询  │ │          │  │  │
 │  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘  │  │
 │  │                                                        │  │
 │  │  ┌──────────────────────────────────────────────────┐  │  │
-│  │  │              工作流编排 (DAG Engine)               │  │  │
-│  │  │  拓扑排序 · 并行执行 · 条件分支 · 上下文传递       │  │  │
+│  │  │                    记忆服务                        │  │  │
+│  │  │  短期记忆 (Redis) · 长期记忆 (Mem0) · 结构化记忆   │  │  │
 │  │  └──────────────────────────────────────────────────┘  │  │
 │  └────────────────────────────────────────────────────────┘  │
 │                                                              │
@@ -51,7 +66,7 @@
 └──────────────────────────────────────────────────────────────┘
        │              │              │              │
        ▼              ▼              ▼              ▼
-  Upstream MCP    Upstream REST    LLM Providers   Mem0 / Milvus
+  Upstream MCP    Upstream REST    LLM Providers   Milvus
   Servers         APIs             (OpenAI等)      (向量存储)
 ```
 
@@ -65,6 +80,7 @@
 | **授权** | `authz` | Grant Engine (跨租户共享), Policy Engine (OPA ABAC), Scope Validator |
 | **治理** | `governance` | Redis 滑动窗口限流 (按租户+Tool), Resilience4j 熔断 (按上游服务) |
 | **审计** | `audit` | 全量调用审计日志, 成功/失败记录, 延迟统计 |
+| **Tracing** | `tracing` | Micrometer Tracing + OpenTelemetry, 自动追踪 Tool/LLM/Vector 调用 |
 | **密钥管理** | `mcp/upstream` | HashiCorp Vault 集成, Token Exchange (不透传调用方凭证) |
 | **管理后台** | `admin` | 租户/服务器/Tool/Grant/审计的 CRUD REST API |
 
@@ -72,25 +88,28 @@
 
 | 模块 | 包路径 | 配置开关 | 职责 |
 |------|--------|----------|------|
-| **MCP 网关** | `mcp/` (含 `router`, `registry`, `upstream`, `builtin`) | 始终启用 | MCP 协议 (JSON-RPC 2.0) 处理, Tool 聚合/路由/分发, 上游 MCP/REST 代理, 内置 Tool |
+| **MCP 网关** | `mcp/` | 始终启用 | MCP 协议 (JSON-RPC 2.0) 处理, Tool 聚合/路由/分发, 上游 MCP/REST 代理 |
 | **LLM 路由** | `llm/` | `agent-platform.llm-router.enabled` | 多供应商统一接入, 模型路由, RPM 配额, 用量计费, 降级容错 |
-| **记忆服务** | `memory/` | `agent-platform.memory.enabled` | 三层记忆: 短期 (Redis TTL) / 长期 (Mem0+Milvus 或 MySQL 降级) / 结构化 (MySQL KV), 语义检索, 自动过期清理 |
-| **任务规划** | `planner/` | `agent-platform.planner.enabled` | LLM 驱动的目标分解, 生成可执行步骤计划, 逐步执行, 上下文传递 |
-| **工作流编排** | `workflow/` | `agent-platform.workflow.enabled` | DAG 工作流定义, 拓扑排序, Virtual Thread 并行执行, 条件分支, 节点间数据映射 |
+| **向量存储/RAG** | `vector/` | `agent-platform.vector.enabled` | Embedding + Milvus 向量存储, 相似度检索, RAG 查询封装 |
+| **Prompt 管理** | `prompt/` | `agent-platform.prompt.enabled` | Prompt 模板存储, 版本管理, Mustache 变量渲染 |
+| **记忆服务** | `memory/` | `agent-platform.memory.enabled` | 三层记忆: 短期 (Redis) / 长期 (Mem0) / 结构化 (MySQL), 语义检索 |
 
 ### 模块间协作
 
 ```
-Planner ──调用──→ LLM (llm_chat Tool) ──→ 生成步骤计划
-    │
-    └──执行──→ ToolDispatcher ──→ 任意已注册 Tool (MCP/REST/内置)
+Agent 服务 ──调用──→ MCP Gateway ──→ 路由到对应模块
 
-Workflow ──编排──→ ToolDispatcher ──→ 按 DAG 拓扑并行调用多个 Tool
-    │
-    └──节点可以是──→ llm_chat / memory_save / memory_query / 任意外部 Tool
+RAG 查询流程:
+  rag_query Tool ──→ VectorStoreService.search() ──→ LlmRouterService.chat()
+                          │                              │
+                          ▼                              ▼
+                      Milvus 检索                    LLM 生成答案
 
-Memory ──被调用──→ 作为 MCP Tool (memory_save, memory_query) 供 Agent 使用
-LLM    ──被调用──→ 作为 MCP Tool (llm_chat, llm_embed) 供 Agent 使用
+向量存储流程:
+  vector_store Tool ──→ EmbeddingModel.embed() ──→ VectorStore.add()
+                              │                        │
+                              ▼                        ▼
+                        OpenAI Embedding           Milvus 存储
 ```
 
 ## 技术栈
@@ -102,12 +121,13 @@ LLM    ──被调用──→ 作为 MCP Tool (llm_chat, llm_embed) 供 Agent 
 | 安全 | Spring Security 6.3 + OAuth 2.1 |
 | 数据库 | MySQL 8.0 (Flyway 迁移) |
 | 缓存 | Redis 7 + Caffeine |
-| 向量存储 | Milvus 2.4 (via Mem0) |
+| 向量存储 | Milvus 2.4 (via Spring AI) |
+| Embedding | OpenAI / 通义千问 (via Spring AI) |
 | 记忆引擎 | Mem0 (可选, 降级到 MySQL) |
 | 密钥管理 | HashiCorp Vault |
 | 策略引擎 | OPA (Open Policy Agent) |
 | 治理 | Resilience4j (限流 + 熔断) |
-| 可观测 | Micrometer + OpenTelemetry + Prometheus |
+| 可观测 | Micrometer Tracing + OpenTelemetry + Prometheus |
 | API 文档 | SpringDoc OpenAPI (Swagger UI) |
 
 ## 项目结构
@@ -115,7 +135,7 @@ LLM    ──被调用──→ 作为 MCP Tool (llm_chat, llm_embed) 供 Agent 
 ```
 agent-platform/
 ├── pom.xml                              # 父 POM (Maven 多模块)
-├── docker-compose.yml                   # 本地开发环境 (MySQL, Redis, OPA, Milvus, Mem0)
+├── docker-compose.yml                   # 本地开发环境 (MySQL, Redis, OPA, Milvus)
 ├── opa/policies/                        # OPA 策略文件
 │
 ├── agent-platform-common/               # 公共模型层 (Maven Module)
@@ -137,20 +157,15 @@ agent-platform/
         ├── authz/                       # GrantEngine, PolicyEngine, ScopeValidator
         ├── governance/                  # RateLimitService, CircuitBreakerService
         ├── audit/                       # AuditLogService
-        ├── admin/                       # Admin REST Controllers (Tenant/Server/Tool/Grant/Audit)
+        ├── tracing/                     # TracingService, ToolTracingAspect
+        ├── admin/                       # Admin REST Controllers
         │
         │── ─── 业务模块 (同级) ───
-        ├── mcp/                         # [MCP 网关]
-        │   ├── McpProtocolHandler.java  #   JSON-RPC 2.0 协议处理
-        │   ├── router/                  #   ToolAggregator + ToolDispatcher
-        │   ├── registry/                #   上游服务注册, 健康检查, Tool 发现
-        │   ├── upstream/                #   McpProxy, RestProxy, TokenExchange, Vault
-        │   └── builtin/                 #   内置 Tool (echo, health_check)
-        │
-        ├── llm/                         # [LLM 路由] LlmRouterService, 供应商/模型/配额管理
-        ├── memory/                      # [记忆服务] MemoryService, Mem0Client, 三层记忆
-        ├── planner/                     # [任务规划] PlanningEngine, LLM 驱动分解
-        └── workflow/                    # [工作流编排] DagExecutionEngine, 拓扑并行执行
+        ├── mcp/                         # [MCP 网关] 协议处理, Tool 聚合/路由/分发
+        ├── llm/                         # [LLM 路由] 多供应商接入, 配额管理
+        ├── vector/                      # [向量/RAG] Embedding, 向量存储, RAG 查询
+        ├── prompt/                      # [Prompt 管理] 模板存储, 版本管理, 渲染
+        └── memory/                      # [记忆服务] 三层记忆架构
 ```
 
 ## 快速开始
@@ -235,26 +250,29 @@ curl -X POST http://localhost:8080/mcp/v1 \
 | `/api/v1/llm/quotas/{tenantId}` | GET/PUT | 租户 LLM 配额 |
 | `/api/v1/llm/usage` | GET | LLM 用量统计 |
 | `/api/v1/memory/namespaces` | POST/GET | 记忆命名空间管理 |
-| `/api/v1/planner/plans` | GET | 规划记录查询 |
-| `/api/v1/workflow/graphs` | POST/GET | 工作流 DAG 模板管理 |
-| `/api/v1/workflow/runs` | GET | 工作流执行记录 |
+| `/api/v1/prompts` | POST/GET | Prompt 模板管理（租户级别） |
+| `/api/v1/prompts/{name}/versions` | POST | 创建新版本 |
+| `/api/v1/vectors/store` | POST | 存储文档到向量库（租户级别） |
+| `/api/v1/vectors/search` | POST | 向量相似度检索 |
+| `/api/v1/vectors` | DELETE | 删除向量 |
+| `/api/v1/vectors/embed` | POST | 获取文本 Embedding |
 
 ### MCP Tool 列表
 
-以下 Tool 通过 `tools/list` 暴露给 Agent，Agent 通过 `tools/call` 调用：
+以下 Tool 通过 `tools/list` 暴露给 Agent 服务，通过 `tools/call` 调用：
 
 | Tool 名称 | 所属模块 | 说明 |
 |-----------|---------|------|
 | `echo` | MCP 网关 (内置) | 回显测试 |
 | `health_check` | MCP 网关 (内置) | 上游服务健康检查 |
 | `llm_chat` | LLM 路由 | 统一 LLM 对话 (多供应商路由) |
-| `llm_embed` | LLM 路由 | 文本向量化 |
+| `vector_store` | 向量/RAG | 存储文档 (自动 Embedding) |
+| `vector_search` | 向量/RAG | 相似度检索 |
+| `vector_delete` | 向量/RAG | 删除向量 |
+| `rag_query` | 向量/RAG | RAG 查询 (检索 + LLM 生成) |
+| `prompt_render` | Prompt 管理 | 渲染 Prompt 模板 |
 | `memory_save` | 记忆服务 | 保存记忆 (短期/长期/结构化) |
 | `memory_query` | 记忆服务 | 查询记忆 (语义检索/精确查询) |
-| `plan_create` | 任务规划 | LLM 驱动的目标分解 |
-| `plan_execute` | 任务规划 | 执行已创建的计划 |
-| `plan_status` | 任务规划 | 查询计划执行状态 |
-| `workflow_run` | 工作流编排 | 执行 DAG 工作流 |
 | *(动态注册)* | MCP 网关 | 来自 Upstream MCP/REST 的外部 Tool |
 
 ## 核心功能详解
@@ -287,24 +305,23 @@ MCP 网关是中台的协议入口，实现 MCP 规范 (JSON-RPC 2.0)，负责 T
 - **结构化记忆** (MySQL): Key-Value 实体记忆，支持 Upsert
 - **命名空间隔离**: 按租户+Agent+命名空间隔离，支持配额限制
 
-### 任务规划
+### 向量存储/RAG
 
-LLM 驱动的任务分解引擎。
+基于 Spring AI 的向量存储和 RAG 能力。
 
-- **目标分解**: 调用 LLM 将自然语言目标分解为可执行步骤
-- **Tool 绑定**: 每个步骤绑定一个可用 Tool，自动校验权限
-- **逐步执行**: 按顺序执行步骤，支持上下文传递 (`$context.` 引用)
-- **容错**: LLM 规划失败时降级到 fallback 步骤
+- **自动 Embedding**: 存储时自动调用 Embedding 模型
+- **多租户隔离**: 按租户+Collection 隔离向量数据
+- **相似度检索**: 支持 Top-K 和相似度阈值过滤
+- **RAG 封装**: `rag_query` 工具封装 检索 → Prompt → LLM 完整流程
 
-### 工作流编排
+### Prompt 管理
 
-基于 DAG 的工作流执行引擎。
+Prompt 模板管理服务。
 
-- **DAG 定义**: JSON 格式定义节点 (nodes) 和边 (edges)
-- **拓扑排序**: BFS 拓扑排序，自动识别可并行节点
-- **并行执行**: Virtual Thread 并行执行同层节点
-- **数据映射**: `$input.` 引用输入, `$node.xxx.field` 引用前置节点结果
-- **条件分支**: 支持 condition 类型节点
+- **模板存储**: 支持多租户的 Prompt 模板存储
+- **版本管理**: 支持模板版本控制
+- **变量渲染**: Mustache 风格变量替换 (`{{variable}}`)
+- **自动提取**: 自动从模板中提取变量列表
 
 ### 认证授权 (共享)
 
@@ -326,17 +343,21 @@ LLM 驱动的任务分解引擎。
 
 ```yaml
 agent-platform:
-  llm-router:
-    enabled: true            # LLM 路由模块
+  prompt:
+    enabled: true            # Prompt 管理模块
+  vector:
+    enabled: true            # 向量存储/RAG 模块
+    milvus:
+      host: localhost
+      port: 19530
+      collection: agent_platform_vectors
   memory:
     enabled: true            # 记忆服务模块
     mem0:
       enabled: false         # Mem0 集成 (关闭则降级到 MySQL)
       url: http://localhost:8000
-  planner:
-    enabled: true            # 任务规划模块
-  workflow:
-    enabled: true            # 工作流编排模块
+  llm-router:
+    enabled: true            # LLM 路由模块
 ```
 
 ### 环境变量
@@ -347,6 +368,8 @@ agent-platform:
 | `DB_PASSWORD` | 数据库密码 | `agent_platform` |
 | `REDIS_HOST` | Redis 地址 | `localhost` |
 | `REDIS_PORT` | Redis 端口 | `6379` |
+| `MILVUS_HOST` | Milvus 地址 | `localhost` |
+| `MILVUS_PORT` | Milvus 端口 | `19530` |
 | `VAULT_ENABLED` | 是否启用 Vault | `false` |
 | `VAULT_URL` | Vault 地址 | `http://localhost:8200` |
 | `OPA_ENABLED` | 是否启用 OPA | `false` |

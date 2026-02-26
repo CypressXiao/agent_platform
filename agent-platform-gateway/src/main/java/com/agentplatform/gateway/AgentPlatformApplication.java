@@ -13,15 +13,14 @@ import org.springframework.scheduling.annotation.EnableScheduling;
     "com.agentplatform.common.model",
     "com.agentplatform.gateway.llm.model",
     "com.agentplatform.gateway.memory.model",
-    "com.agentplatform.gateway.planner.model",
-    "com.agentplatform.gateway.workflow.model"
+    "com.agentplatform.gateway.vector.model",
+    "com.agentplatform.gateway.prompt.model"
 })
 @EnableJpaRepositories(basePackages = {
     "com.agentplatform.common.repository",
     "com.agentplatform.gateway.llm.repository",
     "com.agentplatform.gateway.memory.repository",
-    "com.agentplatform.gateway.planner.repository",
-    "com.agentplatform.gateway.workflow.repository"
+    "com.agentplatform.gateway.prompt.repository"
 })
 @EnableCaching
 @EnableAsync

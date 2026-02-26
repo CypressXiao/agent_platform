@@ -18,10 +18,14 @@ logging:
 
 # Enable all subsystems in dev
 agent-platform:
-  workflow:
+  prompt:
     enabled: true
-  planner:
+  vector:
     enabled: true
+    milvus:
+      host: localhost
+      port: 19530
+      collection: agent_platform_vectors
   memory:
     enabled: true
     mem0:

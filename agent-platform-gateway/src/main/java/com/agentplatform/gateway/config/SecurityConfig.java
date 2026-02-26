@@ -57,14 +57,25 @@ public class SecurityConfig {
             .csrf(AbstractHttpConfigurer::disable)
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
+                // 公开端点
                 .requestMatchers("/.well-known/**").permitAll()
                 .requestMatchers("/actuator/health/**").permitAll()
                 .requestMatchers("/actuator/prometheus").permitAll()
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
                 .requestMatchers("/oauth2/**").permitAll()
+                // MCP 协议入口 - 需要认证
                 .requestMatchers("/mcp/v1/**").authenticated()
+                // Admin API - 需要管理员权限
                 .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/v1/admin/audit/**").hasAnyAuthority("SCOPE_mcp:tools-admin", "SCOPE_mcp:audit-read")
                 .requestMatchers("/api/v1/admin/**").hasAuthority("SCOPE_mcp:tools-admin")
+                // 业务 API - 需要认证（租户级别）
+                .requestMatchers("/api/v1/llm/**").authenticated()
+                .requestMatchers("/api/v1/memory/**").authenticated()
+                .requestMatchers("/api/v1/prompts/**").authenticated()
+                .requestMatchers("/api/v1/vectors/**").authenticated()
+                .requestMatchers("/api/v1/rag/**").authenticated()
+                .requestMatchers("/api/v1/chunking/**").authenticated()
+                // 所有其他请求 - 需要认证
                 .anyRequest().authenticated()
             )
             .oauth2ResourceServer(oauth2 -> {

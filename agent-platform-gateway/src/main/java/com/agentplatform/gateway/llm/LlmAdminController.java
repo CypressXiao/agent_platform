@@ -114,7 +114,7 @@ public class LlmAdminController {
         if (to == null) to = java.time.Instant.now();
 
         var records = usageRepo.findByTenantIdAndCreatedAtBetween(tenantId, from, to);
-        long totalTokens = records.stream().mapToLong(LlmUsageRecord::getTotalTokens).sum();
+        long totalTokens = records.stream().mapToLong(r -> r.getTotalTokens() != null ? r.getTotalTokens() : 0).sum();
         double totalCost = records.stream()
             .filter(r -> r.getCost() != null)
             .mapToDouble(r -> r.getCost().doubleValue())

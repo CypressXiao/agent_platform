@@ -31,15 +31,10 @@ opa:
   enabled: false
 
 agent-platform:
-  v2:
-    workflow:
+  memory:
+    enabled: false
+    mem0:
       enabled: false
-    planner:
-      enabled: false
-    memory:
-      enabled: false
-      mem0:
-        enabled: false
-        url: http://localhost:8000
-    llm-router:
-      enabled: false
+      url: http://localhost:8000
+  llm-router:
+    enabled: false
