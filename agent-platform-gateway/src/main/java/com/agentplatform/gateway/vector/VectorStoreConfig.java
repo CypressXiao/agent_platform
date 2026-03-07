@@ -28,6 +28,9 @@ public class VectorStoreConfig {
     @Value("${agent-platform.vector.milvus.collection:agent_platform_vectors}")
     private String collectionName;
 
+    @Value("${agent-platform.vector.milvus.database:default}")
+    private String databaseName;
+
     @Bean
     public MilvusServiceClient milvusClient() {
         ConnectParam connectParam = ConnectParam.newBuilder()
@@ -43,7 +46,7 @@ public class VectorStoreConfig {
     public VectorStore vectorStore(MilvusServiceClient milvusClient, EmbeddingModel embeddingModel) {
         return MilvusVectorStore.builder(milvusClient, embeddingModel)
             .collectionName(collectionName)
-            .databaseName("default")
+            .databaseName(databaseName)
             .embeddingDimension(1536)
             .build();
     }

@@ -137,7 +137,7 @@ public class McpSseController {
 
     private Map<String, Object> handleInitialize(Map<String, Object> params) {
         return Map.of(
-            "protocolVersion", "2025-03-26",
+            "protocolVersion", "2024-11-05",
             "capabilities", Map.of(
                 "tools", Map.of("listChanged", true)
             ),

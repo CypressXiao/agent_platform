@@ -74,16 +74,33 @@ public class ChunkingConfig {
     private String faqPattern = "^###\\s*Q[:：]";
     
     /**
-     * 是否提取关键词
+     * 关键词提取策略
+     * - DISABLED: 不提取关键词，依赖文档作者提供的 tags
+     * - MILVUS_ANALYZER: 使用 Milvus 稀疏索引 analyzer 提取关键词
      */
     @Builder.Default
-    private boolean extractKeywords = true;
-    
+    private KeywordExtractionStrategy keywordStrategy = KeywordExtractionStrategy.DISABLED;
+
     /**
      * 关键词最大数量
      */
     @Builder.Default
     private int maxKeywords = 10;
+    
+    /**
+     * 是否启用稀疏向量（BM25/倒排索引）
+     * - 标准文档（SOP/Knowledge）：false，仅用稠密向量 + tags 过滤
+     * - 非标准文档：true，启用稠密 + 稀疏混合检索
+     */
+    @Builder.Default
+    private boolean enableSparseVector = false;
+    
+    /**
+     * 稀疏向量 analyzer 名称
+     * 对应 Milvus collection 中配置的 analyzer，如 "chinese", "standard" 等
+     */
+    @Builder.Default
+    private String sparseAnalyzer = "chinese";
     
     /**
      * 语义切分阈值（相似度低于此值时切分）
@@ -102,6 +119,18 @@ public class ChunkingConfig {
      */
     @Builder.Default
     private String embeddingModel = "bge-large-zh";
+    
+    /**
+     * Profile 名称
+     * 用于确定 schema 字段定义和 collection 命名模式
+     */
+    private String profileName;
+    
+    /**
+     * 文档类型：标准文档 vs 非标准文档
+     */
+    @Builder.Default
+    private DocumentType documentType = DocumentType.STANDARD;
     
     /**
      * Embedding 模型最大 token 数
@@ -129,46 +158,21 @@ public class ChunkingConfig {
     public int getMaxCharsForEmbedding() {
         return (int) (embeddingMaxTokens * charsPerToken * 0.9); // 留 10% 余量
     }
-    
-    /**
-     * 预设配置：SOP 文档
-     */
-    public static ChunkingConfig forSOP() {
-        return ChunkingConfig.builder()
-            .strategy(ChunkingStrategy.MARKDOWN)
-            .chunkSize(500)
-            .minChunkSize(100)
-            .maxChunkSize(1500)
-            .overlap(0)
-            .extractKeywords(true)
-            .build();
+
+    public enum KeywordExtractionStrategy {
+        /** 不提取关键词，依赖文档作者提供的 tags */
+        DISABLED,
+        /** 使用 Milvus analyzer 提取关键词（与稀疏索引共用分词器） */
+        MILVUS_ANALYZER
     }
     
     /**
-     * 预设配置：通用文档
+     * 文档类型：标准文档 vs 非标准文档
      */
-    public static ChunkingConfig forGeneral() {
-        return ChunkingConfig.builder()
-            .strategy(ChunkingStrategy.RECURSIVE)
-            .chunkSize(500)
-            .minChunkSize(100)
-            .maxChunkSize(1000)
-            .overlap(100)
-            .extractKeywords(true)
-            .build();
-    }
-    
-    /**
-     * 预设配置：长文档
-     */
-    public static ChunkingConfig forLongDocument() {
-        return ChunkingConfig.builder()
-            .strategy(ChunkingStrategy.FIXED_SIZE)
-            .chunkSize(1000)
-            .minChunkSize(200)
-            .maxChunkSize(2000)
-            .overlap(200)
-            .extractKeywords(true)
-            .build();
+    public enum DocumentType {
+        /** 标准文档：按模板撰写，有 tags，仅用稠密向量 */
+        STANDARD,
+        /** 非标准文档：历史文档，需要稀疏索引 + 关键词提取 */
+        LEGACY
     }
 }

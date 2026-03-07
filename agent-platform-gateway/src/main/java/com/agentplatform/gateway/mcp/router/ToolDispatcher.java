@@ -17,6 +17,8 @@ import com.agentplatform.gateway.mcp.registry.BuiltinToolHandler;
 import com.agentplatform.gateway.mcp.registry.BuiltinToolRegistry;
 import com.agentplatform.gateway.mcp.upstream.McpProxyService;
 import com.agentplatform.gateway.mcp.upstream.RestProxyService;
+import com.agentplatform.gateway.validation.JsonSchemaValidator;
+import com.agentplatform.gateway.job.AsyncToolAdapter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -43,11 +45,21 @@ public class ToolDispatcher {
     private final McpProxyService mcpProxy;
     private final RestProxyService restProxy;
     private final AuditLogService auditLog;
+    private final JsonSchemaValidator schemaValidator;
+    private final AsyncToolAdapter asyncToolAdapter;
 
     /**
      * Dispatch a tool call from an external caller (Agent).
      */
     public Object dispatch(CallerIdentity identity, String toolName, Map<String, Object> arguments) {
+        return dispatch(identity, toolName, arguments, null, null, null);
+    }
+
+    /**
+     * Dispatch with context (runId, stepId, conversationId) for async support
+     */
+    public Object dispatch(CallerIdentity identity, String toolName, Map<String, Object> arguments,
+                           String runId, String stepId, String conversationId) {
         long start = System.currentTimeMillis();
         String grantId = null;
 
@@ -55,31 +67,34 @@ public class ToolDispatcher {
             // 1. Resolve tool
             Tool tool = resolveToolForCaller(identity, toolName);
 
-            // 2. Scope validation
+            // 2. JSON Schema validation
+            schemaValidator.validate(toolName, arguments, tool.getInputSchema());
+
+            // 3. Scope validation
             scopeValidator.validate(identity, tool);
 
-            // 3. Policy check
+            // 4. Policy check
             if (!policyEngine.evaluate(identity, tool)) {
                 throw new McpException(McpErrorCode.FORBIDDEN_POLICY,
                     "Policy denied access to tool: " + toolName);
             }
 
-            // 4. Cross-tenant Grant check
+            // 5. Cross-tenant Grant check
             if (!identity.getTenantId().equals(tool.getOwnerTid()) && !"system".equals(tool.getOwnerTid())) {
                 Grant grant = grantEngine.check(identity.getTenantId(), tool.getOwnerTid(), tool.getToolId());
                 grantId = grant != null ? grant.getGrantId() : null;
             }
 
-            // 5. Governance pre-check (rate limit, circuit breaker)
+            // 6. Governance pre-check (rate limit, circuit breaker)
             governance.preCheck(identity, tool);
 
-            // 6. Route to handler
-            Object result = routeToHandler(identity, tool, arguments);
+            // 7. Route to handler (async or sync)
+            Object result = routeToHandler(identity, tool, arguments, runId, stepId, conversationId);
 
-            // 7. Governance post-check
+            // 8. Governance post-check
             governance.postCheck(identity, tool, true);
 
-            // 8. Audit
+            // 9. Audit
             long latency = System.currentTimeMillis() - start;
             auditLog.logSuccess(identity, tool, grantId, latency, arguments, result);
 
@@ -105,7 +120,7 @@ public class ToolDispatcher {
             throw new McpException(McpErrorCode.FORBIDDEN_POLICY);
         }
         governance.preCheck(identity, tool);
-        Object result = routeToHandler(identity, tool, arguments);
+        Object result = routeToHandler(identity, tool, arguments, null, null, null);
         governance.postCheck(identity, tool, true);
         return result;
     }
@@ -118,7 +133,14 @@ public class ToolDispatcher {
         return candidates.getFirst();
     }
 
-    private Object routeToHandler(CallerIdentity identity, Tool tool, Map<String, Object> arguments) {
+    private Object routeToHandler(CallerIdentity identity, Tool tool, Map<String, Object> arguments,
+                                   String runId, String stepId, String conversationId) {
+        // Check if tool is async
+        if ("ASYNC".equals(tool.getExecutionMode())) {
+            return asyncToolAdapter.dispatch(identity, tool, arguments, runId, stepId, conversationId);
+        }
+
+        // Sync tool execution
         return switch (tool.getSourceType()) {
             case "builtin" -> {
                 BuiltinToolHandler handler = builtinRegistry.getHandler(tool.getToolName())

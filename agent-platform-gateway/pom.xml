@@ -127,6 +127,13 @@
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
         </dependency>
 
+        <!-- JSON Schema Validator -->
+        <dependency>
+            <groupId>com.networknt</groupId>
+            <artifactId>json-schema-validator</artifactId>
+            <version>1.4.0</version>
+        </dependency>
+
         <!-- Spring Authorization Server (local token issuer) -->
         <dependency>
             <groupId>org.springframework.security</groupId>

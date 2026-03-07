@@ -74,6 +74,12 @@ public class RagRequest {
     private boolean enableContextCompletion = true;
     
     /**
+     * 是否启用 LLM 答案生成（默认 false，仅返回检索结果）
+     */
+    @Builder.Default
+    private boolean enableAnswerLLM = false;
+    
+    /**
      * 元数据过滤条件
      */
     private Map<String, Object> metadataFilter;

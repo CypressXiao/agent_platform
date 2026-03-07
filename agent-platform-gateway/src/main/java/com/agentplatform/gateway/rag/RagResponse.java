@@ -53,6 +53,16 @@ public class RagResponse {
     private String rewrittenQuery;
     
     /**
+     * 是否为纯检索模式（无 LLM 答案生成）
+     */
+    private Boolean searchOnlyMode;
+    
+    /**
+     * 检索统计信息
+     */
+    private SearchStats searchStats;
+    
+    /**
      * 图关系（GraphRAG 模式）
      */
     private List<GraphRelation> graphRelations;
@@ -84,5 +94,59 @@ public class RagResponse {
         private String relation;
         private String targetEntity;
         private Map<String, Object> properties;
+    }
+    
+    /**
+     * 检索统计信息
+     */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class SearchStats {
+        /**
+         * 初始检索数量
+         */
+        private Integer initialRetrieved;
+        
+        /**
+         * 重排序后数量
+         */
+        private Integer rerankedCount;
+        
+        /**
+         * 上下文补全后数量
+         */
+        private Integer contextCompletedCount;
+        
+        /**
+         * 是否启用混合检索
+         */
+        private Boolean hybridSearch;
+        
+        /**
+         * 检索耗时（毫秒）
+         */
+        private Long searchDurationMs;
+        
+        /**
+         * 重排序耗时（毫秒）
+         */
+        private Long rerankDurationMs;
+        
+        /**
+         * 上下文补全耗时（毫秒）
+         */
+        private Long contextCompletionDurationMs;
+        
+        /**
+         * 使用的检索类型
+         */
+        private String searchType;
+        
+        /**
+         * 相似度阈值
+         */
+        private Double similarityThreshold;
     }
 }

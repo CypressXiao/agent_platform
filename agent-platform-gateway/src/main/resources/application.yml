@@ -84,6 +84,21 @@ agent-platform:
       host: ${MILVUS_HOST:localhost}
       port: ${MILVUS_PORT:19530}
       collection: agent_platform_vectors
+      database: ${MILVUS_DATABASE:default}
+    embedding:
+      # 企业内部 Embedding 模型配置
+      # provider: enterprise | openai | ollama | azure
+      # 设为 enterprise 时，使用企业内部模型作为默认模型
+      default-provider: ${EMBEDDING_DEFAULT_PROVIDER:enterprise}
+      enterprise:
+        enabled: ${ENTERPRISE_EMBEDDING_ENABLED:false}
+        endpoint: ${ENTERPRISE_EMBEDDING_ENDPOINT:https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding}
+        api-key: ${ENTERPRISE_EMBEDDING_API_KEY:}
+        model: ${ENTERPRISE_EMBEDDING_MODEL:qwen3-vl-embedding}
+        dimension: ${ENTERPRISE_EMBEDDING_DIMENSION:1024}
+        timeout-seconds: ${ENTERPRISE_EMBEDDING_TIMEOUT:30}
+        # format: dashscope | openai
+        format: ${ENTERPRISE_EMBEDDING_FORMAT:dashscope}
   memory:
     enabled: false
     mem0:
@@ -95,9 +110,16 @@ agent-platform:
     # RAG 配置
     reranker:
       enabled: ${RAG_RERANKER_ENABLED:true}
-      provider: ${RAG_RERANKER_PROVIDER:local}  # local, cohere, bge-api
-      api-url: ${RAG_RERANKER_API_URL:}
+      provider: ${RAG_RERANKER_PROVIDER:enterprise}  # local, cohere, bge-api, enterprise
+      api-url: ${RAG_RERANKER_API_URL:https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank}
       api-key: ${RAG_RERANKER_API_KEY:}
+      model: ${RAG_RERANKER_MODEL:qwen3-vl-rerank}
+      instruct: ${RAG_RERANKER_INSTRUCT:}
+      # format: dashscope | openai
+      format: ${RAG_RERANKER_FORMAT:dashscope}
+      retry:
+        max-attempts: ${RAG_RERANKER_RETRY_MAX_ATTEMPTS:3}
+        delay-ms: ${RAG_RERANKER_RETRY_DELAY_MS:500}
     context-completion:
       enabled: ${RAG_CONTEXT_COMPLETION_ENABLED:true}
       window-size: ${RAG_CONTEXT_COMPLETION_WINDOW_SIZE:1}
@@ -131,6 +153,28 @@ logging:
     org.springframework.security: INFO
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{traceId:-}] %-5level %logger{36} - %msg%n"
+
+# Feishu Integration
+feishu:
+  app-id: ${FEISHU_APP_ID:}
+  app-secret: ${FEISHU_APP_SECRET:}
+  base-url: ${FEISHU_BASE_URL:https://open.feishu.cn/open-apis}
+  token:
+    refresh-before-expire-seconds: 300
+    cache-seconds: 7200
+  sync:
+    enabled: ${FEISHU_SYNC_ENABLED:true}
+    cron-expression: ${FEISHU_SYNC_CRON:0 0 2 * * ?}
+    batch-size: ${FEISHU_SYNC_BATCH_SIZE:10}
+    max-concurrent: ${FEISHU_SYNC_MAX_CONCURRENT:5}
+    scan-interval-hours: ${FEISHU_SYNC_SCAN_INTERVAL:24}
+    task-poll-interval-ms: ${FEISHU_SYNC_POLL_INTERVAL:30000}
+    space-scan-cron: ${FEISHU_SPACE_SCAN_CRON:0 0 3 * * ?}
+  retry:
+    max-attempts: ${FEISHU_RETRY_MAX_ATTEMPTS:3}
+    initial-interval-ms: ${FEISHU_RETRY_INITIAL_INTERVAL:1000}
+    multiplier: ${FEISHU_RETRY_MULTIPLIER:2.0}
+    max-interval-ms: ${FEISHU_RETRY_MAX_INTERVAL:60000}
 
 # SpringDoc
 springdoc:

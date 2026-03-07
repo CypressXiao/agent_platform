@@ -1,6 +1,7 @@
 package com.agentplatform.gateway.vector;
 
 import com.agentplatform.common.model.CallerIdentity;
+import com.agentplatform.gateway.rag.chunking.ChunkingConfig;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
@@ -31,7 +32,7 @@ public class VectorStoreService {
      * 存储文档到向量库（使用默认 embedding 模型）
      */
     public List<String> store(CallerIdentity identity, String collection, List<DocumentInput> documents) {
-        return store(identity, collection, documents, null);
+        return store(identity, collection, documents, null, null);
     }
 
     /**
@@ -40,11 +41,29 @@ public class VectorStoreService {
      */
     public List<String> store(CallerIdentity identity, String collection, 
                                List<DocumentInput> documents, String embeddingModelName) {
+        return store(identity, collection, documents, embeddingModelName, null);
+    }
+
+    /**
+     * 存储文档到向量库（支持稀疏向量配置）
+     * @param embeddingModelName 调用方指定的 embedding 模型名称，null 使用默认
+     * @param chunkingConfig 分块配置，用于判断是否需要稀疏向量支持
+     */
+    public List<String> store(CallerIdentity identity, String collection, 
+                               List<DocumentInput> documents, String embeddingModelName,
+                               ChunkingConfig chunkingConfig) {
         String tenantId = identity.getTenantId();
         String modelName = embeddingModelName != null ? embeddingModelName : "default";
         
-        // 获取指定模型的 VectorStore（每个模型使用独立的 collection）
-        VectorStore vectorStore = vectorStoreRegistry.get(modelName);
+        // 获取指定模型的 VectorStore（支持稀疏向量配置）
+        VectorStore vectorStore;
+        if (chunkingConfig != null && chunkingConfig.isEnableSparseVector()) {
+            // 使用支持稀疏向量的 VectorStore
+            vectorStore = vectorStoreRegistry.getWithSparseSupport(collection, modelName, chunkingConfig);
+        } else {
+            // 使用常规 VectorStore
+            vectorStore = vectorStoreRegistry.get(modelName);
+        }
         
         List<Document> docs = documents.stream()
             .map(input -> {
@@ -55,6 +74,12 @@ public class VectorStoreService {
                 metadata.put("collection", collection);
                 // 记录使用的 embedding 模型
                 metadata.put("embedding_model", modelName);
+                
+                // 稀疏向量数据由 Milvus analyzer/BM25 自动生成，无需在应用层写入
+                if (chunkingConfig != null && chunkingConfig.isEnableSparseVector()) {
+                    metadata.put("enable_sparse_vector", true);
+                    metadata.put("sparse_analyzer", chunkingConfig.getSparseAnalyzer());
+                }
                 
                 return new Document(input.getId(), input.getContent(), metadata);
             })
@@ -73,7 +98,7 @@ public class VectorStoreService {
      */
     public List<SearchResult> search(CallerIdentity identity, String collection, 
                                       String query, int topK, Double similarityThreshold) {
-        return search(identity, collection, query, topK, similarityThreshold, null);
+        return search(identity, collection, query, topK, similarityThreshold, null, null);
     }
 
     /**
@@ -83,11 +108,29 @@ public class VectorStoreService {
     public List<SearchResult> search(CallerIdentity identity, String collection, 
                                       String query, int topK, Double similarityThreshold,
                                       String embeddingModelName) {
+        return search(identity, collection, query, topK, similarityThreshold, embeddingModelName, null);
+    }
+
+    /**
+     * 相似度搜索（支持混合检索）
+     * @param embeddingModelName 调用方指定的 embedding 模型名称，null 使用默认
+     * @param chunkingConfig 分块配置，用于判断是否需要稀疏向量检索
+     */
+    public List<SearchResult> search(CallerIdentity identity, String collection, 
+                                      String query, int topK, Double similarityThreshold,
+                                      String embeddingModelName, ChunkingConfig chunkingConfig) {
         String tenantId = identity.getTenantId();
         String modelName = embeddingModelName != null ? embeddingModelName : "default";
         
-        // 获取指定模型的 VectorStore
-        VectorStore vectorStore = vectorStoreRegistry.get(modelName);
+        // 获取指定模型的 VectorStore（支持稀疏向量配置）
+        VectorStore vectorStore;
+        if (chunkingConfig != null && chunkingConfig.isEnableSparseVector()) {
+            // 使用支持稀疏向量的 VectorStore
+            vectorStore = vectorStoreRegistry.getWithSparseSupport(collection, modelName, chunkingConfig);
+        } else {
+            // 使用常规 VectorStore
+            vectorStore = vectorStoreRegistry.get(modelName);
+        }
         
         SearchRequest request = SearchRequest.builder()
             .query(query)

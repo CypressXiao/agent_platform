@@ -72,6 +72,23 @@ public class Tool {
     @Builder.Default
     private String status = "active";
 
+    @Column(name = "execution_mode")
+    @Builder.Default
+    private String executionMode = "SYNC"; // SYNC | ASYNC
+
+    @Column(name = "result_delivery")
+    private String resultDelivery; // CALLBACK | QUEUE (only for ASYNC)
+
+    @Column(name = "callback_url")
+    private String callbackUrl;
+
+    @Type(JsonType.class)
+    @Column(name = "callback_auth", columnDefinition = "json")
+    private Map<String, Object> callbackAuth; // { type: API_KEY|HMAC|OAUTH2, ... }
+
+    @Column(name = "queue_topic")
+    private String queueTopic;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     @Builder.Default
     private Instant createdAt = Instant.now();

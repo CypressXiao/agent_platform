@@ -1,0 +1,103 @@
+# 推荐的 RAG 配置 - 基于当前项目情况
+agent-platform:
+  rag:
+    # Retrieval 原生配置
+    retrieval:
+      default-top-k: 5                    # 默认检索数量
+      default-similarity-threshold: 0.7   # 默认相似度阈值
+      
+      # 混合检索配置
+      hybrid-search:
+        enabled: true                      # 启用混合检索
+        sparse-analyzer: "standard"        # 稀疏分析器
+        dense-weight: 0.6                 # 稠密向量权重
+        sparse-weight: 0.4                # 稀疏向量权重
+    
+    # Rerank 原生配置
+    rerank:
+      enabled: true
+      default-provider: "enterprise"
+      
+      providers:
+        enterprise:
+          api-url: "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
+          api-key: "${RAG_RERANKER_API_KEY:}"
+          model: "qwen3-vl-rerank"        # 企业 reranker
+          top-n: 20                         # API 原生参数：最多返回 20 个
+          format: "dashscope"
+          timeout-seconds: 30
+          retry:
+            max-attempts: 3
+            delay-ms: 500
+            backoff-multiplier: 2.0
+        
+        local:
+          format: "local"                  # 本地重排序标识
+    
+    # 宽进严出策略
+    wide-to-tight:
+      default-strategy:
+        retrieve-multiplier: 3.0        # 检索 3 倍
+        threshold-reduction: 0.2        # 阈值降低 20%
+        rerank-output-ratio: 1.0        # rerank 按用户 topK 输出
+        min-retrieve-k: 8               # 最少检索 8 个
+        max-retrieve-k: 30              # 最多检索 30 个（成本控制）
+      
+      # 按文档类型策略
+      document-types:
+        sop:                              # SOP 文档
+          characteristic: "structured"
+          retrieve-multiplier: 2.0       # 结构化，倍数较低
+          threshold-reduction: 0.1       # 质量高，降低少
+          recommend-rerank: true          # 推荐 rerank
+          rerank-output-ratio: 0.9       # 严格输出
+          min-retrieve-k: 6
+          max-retrieve-k: 20
+        
+        knowledge:                        # 知识库文档
+          characteristic: "complex"
+          retrieve-multiplier: 4.0       # 复杂，倍数较高
+          threshold-reduction: 0.25       # 覆盖优先
+          recommend-rerank: true          # 强烈推荐 rerank
+          rerank-output-ratio: 1.0       # 正常输出
+          min-retrieve-k: 10
+          max-retrieve-k: 40
+        
+        faq:                              # FAQ 文档
+          characteristic: "simple"
+          retrieve-multiplier: 1.5       # 简单，倍数最低
+          threshold-reduction: 0.05      # 高质量，降低最少
+          recommend-rerank: false         # FAQ 不需要 rerank
+          rerank-output-ratio: 1.0
+          min-retrieve-k: 4
+          max-retrieve-k: 12
+      
+      # 按场景策略
+      scenarios:
+        qa:                              # 问答场景
+          name: "问答场景"
+          retrieve-multiplier: 2.5       # 适中检索
+          threshold-reduction: 0.15      # 适度降低阈值
+          enable-rerank: true             # 启用 rerank
+          rerank-output-ratio: 0.8       # 更严格输出
+        
+        research:                        # 研究场景
+          name: "研究场景"
+          retrieve-multiplier: 4.0       # 大量检索
+          threshold-reduction: 0.3        # 大幅降低阈值
+          enable-rerank: true             # 启用 rerank
+          rerank-output-ratio: 1.2       # 可以多输出
+        
+        decision:                        # 决策场景
+          name: "决策场景"
+          retrieve-multiplier: 3.5       # 充分检索
+          threshold-reduction: 0.25       # 显著降低阈值
+          enable-rerank: true             # 启用 rerank
+          rerank-output-ratio: 1.0       # 精确输出
+    
+    # 成本控制
+    cost-control:
+      sensitivity: 0.6                   # 中等成本敏感
+      max-retrieve-k: 50                 # 硬限制
+      max-rerank-k: 30                   # 硬限制
+      token-budget-per-hour: 80000       # token 预算/小时

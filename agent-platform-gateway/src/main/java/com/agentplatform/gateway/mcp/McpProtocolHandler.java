@@ -79,7 +79,7 @@ public class McpProtocolHandler {
 
     private Map<String, Object> handleInitialize(Map<String, Object> params) {
         return Map.of(
-            "protocolVersion", "2025-11-25",
+            "protocolVersion", "2024-11-05",
             "capabilities", Map.of(
                 "tools", Map.of("listChanged", true)
             ),

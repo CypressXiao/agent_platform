@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import java.time.Duration;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -25,13 +26,28 @@ public class Reranker {
     private boolean enabled;
 
     @Value("${agent-platform.rag.reranker.provider:local}")
-    private String provider; // local, cohere, bge-api
+    private String provider; // local, cohere, bge-api, enterprise
 
     @Value("${agent-platform.rag.reranker.api-url:}")
     private String apiUrl;
 
     @Value("${agent-platform.rag.reranker.api-key:}")
     private String apiKey;
+
+    @Value("${agent-platform.rag.reranker.model:qwen3-rerank}")
+    private String rerankModel;
+
+    @Value("${agent-platform.rag.reranker.instruct:Given a web search query, retrieve relevant passages that answer the query.}")
+    private String rerankInstruct;
+
+    @Value("${agent-platform.rag.reranker.format:dashscope}")
+    private String rerankFormat;  // dashscope, openai
+
+    @Value("${agent-platform.rag.reranker.retry.max-attempts:3}")
+    private int maxRetryAttempts;
+
+    @Value("${agent-platform.rag.reranker.retry.delay-ms:500}")
+    private int retryDelayMs;
 
     private final WebClient.Builder webClientBuilder;
 
@@ -55,6 +71,7 @@ public class Reranker {
             List<RankedResult> rankedResults = switch (provider.toLowerCase()) {
                 case "cohere" -> rerankWithCohere(query, results);
                 case "bge-api" -> rerankWithBgeApi(query, results);
+                case "enterprise" -> rerankWithEnterprise(query, results);
                 default -> rerankLocal(query, results);
             };
 
@@ -150,6 +167,133 @@ public class Reranker {
         }
 
         return rerankLocal(query, results);
+    }
+
+    /**
+     * 使用企业内部 Reranker API
+     * 支持多种 format：
+     *   - dashscope: qwen3-vl-rerank 多模态格式
+     *   - openai: OpenAI 兼容格式（qwen3-rerank 等）
+     */
+    private List<RankedResult> rerankWithEnterprise(String query, List<VectorStoreService.SearchResult> results) {
+        if (apiUrl == null || apiUrl.isBlank()) {
+            log.warn("Enterprise Reranker API URL not configured, falling back to local rerank");
+            return rerankLocal(query, results);
+        }
+        if (apiKey == null || apiKey.isBlank()) {
+            log.warn("Enterprise Reranker API key not configured, falling back to local rerank");
+            return rerankLocal(query, results);
+        }
+
+        Map<String, Object> requestBody = buildEnterpriseRerankRequest(query, results);
+
+        // 重试机制
+        Exception lastException = null;
+        for (int attempt = 1; attempt <= maxRetryAttempts; attempt++) {
+            try {
+                WebClient client = webClientBuilder
+                    .baseUrl(apiUrl)
+                    .defaultHeader("Authorization", "Bearer " + apiKey)
+                    .build();
+
+                @SuppressWarnings("unchecked")
+                Map<String, Object> response = client.post()
+                    .bodyValue(requestBody)
+                    .retrieve()
+                    .bodyToMono(Map.class)
+                    .timeout(Duration.ofSeconds(30))
+                    .block();
+
+                List<RankedResult> parsed = parseEnterpriseRerankResponse(response, results);
+                if (parsed != null) {
+                    return parsed;
+                }
+            } catch (Exception e) {
+                lastException = e;
+                log.warn("Enterprise rerank attempt {}/{} failed: {}", attempt, maxRetryAttempts, e.getMessage());
+                if (attempt < maxRetryAttempts) {
+                    try {
+                        Thread.sleep(retryDelayMs * attempt);  // 递增延迟
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }
+        }
+
+        log.error("Enterprise rerank failed after {} attempts", maxRetryAttempts, lastException);
+        return rerankLocal(query, results);
+    }
+
+    /**
+     * 按 format 构建请求体
+     */
+    private Map<String, Object> buildEnterpriseRerankRequest(String query, List<VectorStoreService.SearchResult> results) {
+        return switch (rerankFormat.toLowerCase()) {
+            case "dashscope" -> {
+                // qwen3-vl-rerank 多模态格式
+                List<Map<String, Object>> documents = results.stream()
+                    .map(r -> Map.<String, Object>of("text", r.getContent()))
+                    .collect(Collectors.toList());
+                yield Map.of(
+                    "model", rerankModel,
+                    "input", Map.of(
+                        "query", Map.of("text", query),
+                        "documents", documents
+                    ),
+                    "parameters", Map.of(
+                        "return_documents", true,
+                        "top_n", results.size()
+                    )
+                );
+            }
+            default -> {
+                // OpenAI 兼容格式（qwen3-rerank 等）
+                List<String> documents = results.stream()
+                    .map(VectorStoreService.SearchResult::getContent)
+                    .collect(Collectors.toList());
+                yield Map.of(
+                    "model", rerankModel,
+                    "query", query,
+                    "documents", documents,
+                    "top_n", results.size()
+                );
+            }
+        };
+    }
+
+    /**
+     * 按 format 解析响应
+     */
+    @SuppressWarnings("unchecked")
+    private List<RankedResult> parseEnterpriseRerankResponse(Map<String, Object> response, 
+                                                              List<VectorStoreService.SearchResult> results) {
+        if (response == null) return null;
+
+        List<Map<String, Object>> rerankResults = switch (rerankFormat.toLowerCase()) {
+            case "dashscope" -> {
+                // {"output": {"results": [...]}}
+                if (!response.containsKey("output")) yield null;
+                Map<String, Object> output = (Map<String, Object>) response.get("output");
+                yield (List<Map<String, Object>>) output.get("results");
+            }
+            default -> {
+                // {"results": [...]}
+                if (!response.containsKey("results")) yield null;
+                yield (List<Map<String, Object>>) response.get("results");
+            }
+        };
+
+        if (rerankResults == null) return null;
+
+        return rerankResults.stream()
+            .map(rr -> {
+                int index = ((Number) rr.get("index")).intValue();
+                double score = ((Number) rr.get("relevance_score")).doubleValue();
+                return new RankedResult(results.get(index), results.get(index).getScore(), score);
+            })
+            .collect(Collectors.toList());
     }
 
     /**

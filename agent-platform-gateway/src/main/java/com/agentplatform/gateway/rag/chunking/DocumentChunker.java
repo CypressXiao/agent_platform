@@ -1,6 +1,7 @@
 package com.agentplatform.gateway.rag.chunking;
 
 import com.agentplatform.gateway.llm.LlmRouterService;
+import com.agentplatform.gateway.rag.chunking.ChunkingConfig.KeywordExtractionStrategy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -75,9 +76,11 @@ public class DocumentChunker {
             chunk.getMetadata().put("embedding_model", config.getEmbeddingModel());
             
             // 提取关键词
-            if (config.isExtractKeywords()) {
-                chunk.setKeywords(extractKeywords(chunk.getContent(), config.getMaxKeywords()));
+            List<String> keywords = extractKeywords(chunk.getContent(), config);
+            if (!keywords.isEmpty()) {
+                chunk.setKeywords(keywords);
             }
+            
         }
 
         log.info("Chunked document '{}' into {} chunks using {} strategy (max {} chars/chunk for embedding)", 
@@ -174,6 +177,9 @@ public class DocumentChunker {
     private List<Chunk> chunkMarkdown(String content, ChunkingConfig config) {
         List<Chunk> chunks = new ArrayList<>();
         
+        // 解析元信息块
+        Map<String, Object> documentMetadata = extractDocumentMetadata(content);
+        
         // 正则匹配 Markdown 标题
         Pattern headingPattern = Pattern.compile("^(#{1,6})\\s+(.+)$", Pattern.MULTILINE);
         Pattern stepPattern = Pattern.compile(config.getStepPattern(), Pattern.MULTILINE);
@@ -210,6 +216,8 @@ public class DocumentChunker {
             // 判断 chunk 类型
             Chunk.ChunkType type = Chunk.ChunkType.PARAGRAPH;
             Map<String, Object> metadata = new HashMap<>();
+            // 继承文档级元信息
+            metadata.putAll(documentMetadata);
             metadata.put("heading_level", headingLevels.get(i));
             metadata.put("heading_title", headingTitles.get(i));
             
@@ -610,40 +618,113 @@ public class DocumentChunker {
     }
 
     /**
-     * 提取关键词（简单实现）
+     * 提取文档元信息块
+     * 解析 Markdown 中的元信息块（> ✅ **文档元信息块** 格式）
+     * 支持的字段：document_id, version, publish_date, owner, approver, applicable_scope, tags
      */
-    private List<String> extractKeywords(String content, int maxKeywords) {
+    private Map<String, Object> extractDocumentMetadata(String content) {
+        Map<String, Object> metadata = new HashMap<>();
+        
+        // 匹配元信息块中的字段（格式：`field`: value 或 field: value）
+        // 支持 blockquote 格式 (> - `field`: value)
+        Pattern metadataPattern = Pattern.compile(
+            "^>?\\s*-?\\s*`?(document_id|version|publish_date|owner|approver|applicable_scope|tags)`?\\s*[:：]\\s*(.+)$",
+            Pattern.MULTILINE | Pattern.CASE_INSENSITIVE
+        );
+        
+        Matcher matcher = metadataPattern.matcher(content);
+        while (matcher.find()) {
+            String field = matcher.group(1).toLowerCase().trim();
+            String value = matcher.group(2).trim();
+            
+            // 跳过占位符值
+            if (value.startsWith("（可留空") || value.startsWith("(可留空")) {
+                continue;
+            }
+            
+            // 处理 tags 字段（转为列表）
+            if ("tags".equals(field)) {
+                List<String> tags = Arrays.stream(value.split("[,，]"))
+                    .map(String::trim)
+                    .filter(s -> !s.isEmpty())
+                    .collect(Collectors.toList());
+                metadata.put(field, tags);
+            } else {
+                metadata.put(field, value);
+            }
+        }
+        
+        // 也尝试从表格格式提取（| 字段 | 值 |）
+        Pattern tablePattern = Pattern.compile(
+            "^\\|\\s*(文档编号|版本|发布日期|负责人|适用范围|标签)\\s*\\|\\s*(.+?)\\s*\\|",
+            Pattern.MULTILINE
+        );
+        
+        Matcher tableMatcher = tablePattern.matcher(content);
+        while (tableMatcher.find()) {
+            String fieldCn = tableMatcher.group(1).trim();
+            String value = tableMatcher.group(2).trim();
+            
+            // 跳过占位符值
+            if (value.startsWith("（可留空") || value.startsWith("(可留空")) {
+                continue;
+            }
+            
+            // 中文字段映射到英文
+            String field = switch (fieldCn) {
+                case "文档编号" -> "document_id";
+                case "版本" -> "version";
+                case "发布日期" -> "publish_date";
+                case "负责人" -> "owner";
+                case "适用范围" -> "applicable_scope";
+                case "标签" -> "tags";
+                default -> null;
+            };
+            
+            if (field != null && !metadata.containsKey(field)) {
+                if ("tags".equals(field)) {
+                    List<String> tags = Arrays.stream(value.split("[,，]"))
+                        .map(String::trim)
+                        .filter(s -> !s.isEmpty())
+                        .collect(Collectors.toList());
+                    metadata.put(field, tags);
+                } else {
+                    metadata.put(field, value);
+                }
+            }
+        }
+        
+        log.debug("Extracted document metadata: {}", metadata);
+        return metadata;
+    }
+
+    /**
+     * 提取关键词
+     * 
+     * 策略说明：
+     * - DISABLED: 不提取关键词，依赖文档作者提供的 tags（标准文档）
+     * - MILVUS_ANALYZER: 关键词由 Milvus 稀疏索引自动生成，此处不做额外提取
+     *   实际的关键词/term 提取在 VectorStoreService 中通过 Milvus analyzer 完成
+     */
+    private List<String> extractKeywords(String content, ChunkingConfig config) {
         if (content == null || content.isBlank()) {
             return List.of();
         }
 
-        // 停用词
-        Set<String> stopWords = Set.of(
-            "的", "是", "在", "了", "和", "与", "或", "等", "及", "到", "为", "被", "把", "让",
-            "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-            "have", "has", "had", "do", "does", "did", "will", "would", "could", "should",
-            "may", "might", "must", "shall", "can", "need", "dare", "ought", "used",
-            "to", "of", "in", "for", "on", "with", "at", "by", "from", "as", "into",
-            "through", "during", "before", "after", "above", "below", "between", "under"
-        );
-
-        // 分词并统计词频
-        Map<String, Integer> wordFreq = new HashMap<>();
-        String[] words = content.split("[\\s\\p{Punct}]+");
-        
-        for (String word : words) {
-            word = word.trim().toLowerCase();
-            if (word.length() >= 2 && !stopWords.contains(word)) {
-                wordFreq.merge(word, 1, Integer::sum);
-            }
+        KeywordExtractionStrategy strategy = config.getKeywordStrategy();
+        if (strategy == KeywordExtractionStrategy.DISABLED) {
+            return List.of();
         }
 
-        // 按词频排序，取前 N 个
-        return wordFreq.entrySet().stream()
-            .sorted((a, b) -> b.getValue().compareTo(a.getValue()))
-            .limit(maxKeywords)
-            .map(Map.Entry::getKey)
-            .collect(Collectors.toList());
+        if (strategy == KeywordExtractionStrategy.MILVUS_ANALYZER) {
+            // 依赖 Milvus analyzer/BM25 自动生成稀疏向量及关键词
+            log.debug("Keyword strategy MILVUS_ANALYZER: delegating keyword extraction to Milvus analyzer");
+            return List.of();
+        }
+
+        // 未知策略，返回空列表
+        log.warn("Unknown keyword extraction strategy: {}", strategy);
+        return List.of();
     }
 
     /**
@@ -738,4 +819,5 @@ public class DocumentChunker {
         }
         return (int) Math.ceil(content.length() / config.getCharsPerToken());
     }
+
 }

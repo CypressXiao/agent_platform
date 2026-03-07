@@ -1,0 +1,76 @@
+# Milvus 全局函数配置
+agent-platform:
+  rag:
+    milvus:
+      # 🎯 全局函数配置
+      functions:
+        # 企业 Embedding 函数
+        enterprise_embedding:
+          enabled: true
+          model: "qwen3-vl-embedding"
+          endpoint: "${ENTERPRISE_EMBEDDING_ENDPOINT:https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding}"
+          api-key: "${ENTERPRISE_EMBEDDING_API_KEY:}"
+          dimension: 1024
+          timeout-seconds: 30
+          retry-attempts: 3
+          description: "企业内部 embedding 函数"
+        
+        # 企业稀疏向量函数
+        enterprise_sparse:
+          enabled: true
+          analyzer: "standard"
+          bm25-k1: 1.2
+          bm25-b: 0.75
+          bm25-epsilon: 0.25
+          min-term-length: 2
+          max-terms: 1000
+          description: "企业内部稀疏向量函数"
+        
+        # 企业混合搜索函数
+        enterprise_hybrid:
+          enabled: true
+          dense-function: "enterprise_embedding"
+          sparse-function: "enterprise_sparse"
+          fusion-type: "weighted_sum"
+          dense-weight: 0.6
+          sparse-weight: 0.4
+          hybrid-threshold: 0.5
+          description: "企业内部混合搜索函数"
+      
+      # Collection 配置
+      collection:
+        name: "agent_platform_hybrid"
+        auto-create: true
+        auto-load: true
+        
+        # 字段配置
+        fields:
+          - name: "id"
+            type: "VARCHAR"
+            primary-key: true
+            max-length: 100
+            auto-id: false
+          
+          - name: "content"
+            type: "VARCHAR"
+            max-length: 65535
+            # 🎯 引用全局函数
+            functions:
+              - "enterprise_embedding"  # 自动生成稠密向量
+              - "enterprise_sparse"     # 自动生成稀疏向量
+          
+          - name: "metadata"
+            type: "JSON"
+        
+        # 索引配置
+        indexes:
+          - field: "id"
+            type: "PRIMARY_KEY"
+          
+          # 🎯 函数字段不需要手动索引，Milvus 自动处理
+        
+        # 搜索配置
+        search:
+          default-mode: "hybrid"  # hybrid, dense_only, sparse_only
+          default-top-k: 10
+          default-threshold: 0.5

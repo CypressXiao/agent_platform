@@ -25,4 +25,10 @@ public interface AuditLogRepository extends JpaRepository<AuditLog, String> {
 
     @Query("SELECT a FROM AuditLog a WHERE a.traceId = :traceId ORDER BY a.timestamp ASC")
     java.util.List<AuditLog> findByTraceId(@Param("traceId") String traceId);
+
+    long countByActorTid(String actorTid);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("DELETE FROM AuditLog a WHERE a.actorTid = :tid AND a.timestamp < :cutoff")
+    int deleteByActorTidAndTimestampBefore(@Param("tid") String tid, @Param("cutoff") Instant cutoff);
 }

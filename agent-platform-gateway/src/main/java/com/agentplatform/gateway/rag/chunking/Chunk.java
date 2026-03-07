@@ -58,6 +58,12 @@ public class Chunk {
     private List<String> keywords;
     
     /**
+     * 稠密向量（embedding）
+     * 由 VectorStoreService 在存储时生成
+     */
+    private float[] denseVector;
+    
+    /**
      * Chunk 类型枚举
      */
     public enum ChunkType {

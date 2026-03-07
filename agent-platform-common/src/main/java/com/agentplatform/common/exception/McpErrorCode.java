@@ -30,6 +30,7 @@ public enum McpErrorCode {
 
     // General
     BAD_REQUEST("BAD_REQUEST", "Invalid request", 400),
+    INVALID_PARAMS("INVALID_PARAMS", "Invalid parameters", 400),
     INTERNAL_ERROR("INTERNAL_ERROR", "Internal server error", 500),
 
     // v2 Workflow

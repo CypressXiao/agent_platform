@@ -3,6 +3,7 @@ package com.agentplatform.gateway.vector;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -14,6 +15,7 @@ import java.util.Set;
 /**
  * Embedding 模型注册中心
  * 管理多个 embedding 模型，支持调用方动态选择
+ * 优先级：enterprise（若启用）> Spring AI 自动配置模型
  */
 @Component
 @Slf4j
@@ -24,7 +26,7 @@ public class EmbeddingModelRegistry {
      * 模型注册表：模型名称 -> EmbeddingModel 实例
      */
     private final Map<String, EmbeddingModel> models = new HashMap<>();
-    
+
     /**
      * 默认模型名称
      */
@@ -35,6 +37,34 @@ public class EmbeddingModelRegistry {
      */
     private final EmbeddingModel autoConfiguredModel;
 
+    /**
+     * 默认 provider：enterprise | openai | ollama | azure
+     */
+    @Value("${agent-platform.vector.embedding.default-provider:enterprise}")
+    private String defaultProvider;
+
+    /** 企业模型开关 */
+    @Value("${agent-platform.vector.embedding.enterprise.enabled:false}")
+    private boolean enterpriseEnabled;
+
+    @Value("${agent-platform.vector.embedding.enterprise.endpoint:}")
+    private String enterpriseEndpoint;
+
+    @Value("${agent-platform.vector.embedding.enterprise.api-key:}")
+    private String enterpriseApiKey;
+
+    @Value("${agent-platform.vector.embedding.enterprise.model:enterprise-embed-v1}")
+    private String enterpriseModelName;
+
+    @Value("${agent-platform.vector.embedding.enterprise.dimension:1536}")
+    private int enterpriseDimension;
+
+    @Value("${agent-platform.vector.embedding.enterprise.timeout-seconds:30}")
+    private int enterpriseTimeout;
+
+    @Value("${agent-platform.vector.embedding.enterprise.format:openai}")
+    private String enterpriseFormat;
+
     @Autowired
     public EmbeddingModelRegistry(@Autowired(required = false) EmbeddingModel autoConfiguredModel) {
         this.autoConfiguredModel = autoConfiguredModel;
@@ -42,13 +72,35 @@ public class EmbeddingModelRegistry {
 
     @PostConstruct
     public void init() {
-        // 注册自动配置的模型
+        // 1. 注册企业内部模型（如果启用）
+        if (enterpriseEnabled) {
+            EnterpriseEmbeddingModel enterpriseModel = new EnterpriseEmbeddingModel(
+                enterpriseEndpoint, enterpriseApiKey, enterpriseModelName,
+                enterpriseDimension, enterpriseTimeout, enterpriseFormat
+            );
+            register("enterprise", enterpriseModel);
+            log.info("Registered enterprise EmbeddingModel: endpoint={}, model={}, dimension={}",
+                enterpriseEndpoint, enterpriseModelName, enterpriseDimension);
+        }
+
+        // 2. 注册 Spring AI 自动配置的模型
         if (autoConfiguredModel != null) {
-            register("default", autoConfiguredModel);
             register("openai", autoConfiguredModel);
-            log.info("Registered auto-configured EmbeddingModel as 'default' and 'openai'");
+            log.info("Registered auto-configured EmbeddingModel as 'openai'");
+        }
+
+        // 3. 设置默认模型（按 default-provider 配置）
+        if ("enterprise".equalsIgnoreCase(defaultProvider) && enterpriseEnabled) {
+            register("default", models.get("enterprise"));
+            log.info("Default EmbeddingModel set to: enterprise");
+        } else if (autoConfiguredModel != null) {
+            register("default", autoConfiguredModel);
+            log.info("Default EmbeddingModel set to: openai (auto-configured)");
+        } else if (enterpriseEnabled) {
+            register("default", models.get("enterprise"));
+            log.info("Default EmbeddingModel set to: enterprise (fallback, no auto-configured model)");
         } else {
-            log.warn("No EmbeddingModel auto-configured. Please register models manually.");
+            log.warn("No EmbeddingModel available. Please configure spring.ai.* or enterprise embedding.");
         }
     }
 
