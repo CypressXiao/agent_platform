@@ -1,5 +1,8 @@
 package com.agentplatform.gateway.llm;
 
+import com.agentplatform.gateway.llm.provider.LlmProviderHandler;
+import com.agentplatform.gateway.llm.provider.LlmProviderHandler.TokenUsage;
+import com.agentplatform.gateway.llm.provider.LlmProviderHandlerFactory;
 import com.agentplatform.common.exception.McpErrorCode;
 import com.agentplatform.common.exception.McpException;
 import com.agentplatform.common.model.CallerIdentity;
@@ -34,6 +37,7 @@ public class LlmRouterService {
     private final VaultService vault;
     private final WebClient.Builder webClientBuilder;
     private final RateLimitService rateLimitService;
+    private final LlmProviderHandlerFactory handlerFactory;
 
     @SuppressWarnings("unchecked")
     public Map<String, Object> chat(CallerIdentity identity, String model, List<Map<String, Object>> messages,
@@ -137,17 +141,15 @@ public class LlmRouterService {
     private Map<String, Object> callLlm(LlmProvider provider, LlmModelConfig config,
                                           String apiKey, List<Map<String, Object>> messages,
                                           Double temperature, Integer maxTokens) {
+        LlmProviderHandler handler = handlerFactory.getHandler(provider.getName());
+        
         WebClient client = webClientBuilder.baseUrl(provider.getBaseUrl()).build();
-
-        Map<String, Object> requestBody = new HashMap<>();
-        requestBody.put("model", config.getModelName());
-        requestBody.put("messages", messages);
-        if (temperature != null) requestBody.put("temperature", temperature);
-        if (maxTokens != null) requestBody.put("max_tokens", maxTokens);
-
+        
+        Map<String, Object> requestBody = handler.buildRequestBody(config, messages, temperature, maxTokens);
+        
         Map<String, Object> response = client.post()
-            .uri("/v1/chat/completions")
-            .header("Authorization", "Bearer " + apiKey)
+            .uri(handler.getApiEndpoint())
+            .header("Authorization", handler.buildAuthHeader(apiKey))
             .header("Content-Type", "application/json")
             .bodyValue(requestBody)
             .retrieve()
@@ -158,22 +160,17 @@ public class LlmRouterService {
             throw new McpException(McpErrorCode.LLM_PROVIDER_ERROR, "No response from LLM provider");
         }
 
-        // Extract content from OpenAI-compatible response
-        List<Map<String, Object>> choices = (List<Map<String, Object>>) response.get("choices");
-        Map<String, Object> usage = (Map<String, Object>) response.get("usage");
-
-        String content = "";
-        if (choices != null && !choices.isEmpty()) {
-            Map<String, Object> message = (Map<String, Object>) choices.getFirst().get("message");
-            if (message != null) {
-                content = (String) message.getOrDefault("content", "");
-            }
-        }
+        String content = handler.extractContent(response);
+        TokenUsage tokenUsage = handler.extractTokenUsage(response);
 
         Map<String, Object> result = new HashMap<>();
         result.put("content", content);
         result.put("model", config.getModelId());
-        result.put("usage", usage != null ? usage : Map.of());
+        result.put("usage", Map.of(
+            "prompt_tokens", tokenUsage.getPromptTokens(),
+            "completion_tokens", tokenUsage.getCompletionTokens(),
+            "total_tokens", tokenUsage.getTotalTokens()
+        ));
         return result;
     }
 
@@ -184,7 +181,7 @@ public class LlmRouterService {
             Map<String, Object> usage = (Map<String, Object>) response.getOrDefault("usage", Map.of());
             int promptTokens = usage.containsKey("prompt_tokens") ? ((Number) usage.get("prompt_tokens")).intValue() : 0;
             int completionTokens = usage.containsKey("completion_tokens") ? ((Number) usage.get("completion_tokens")).intValue() : 0;
-            int totalTokens = promptTokens + completionTokens;
+            int totalTokens = usage.containsKey("total_tokens") ? ((Number) usage.get("total_tokens")).intValue() : promptTokens + completionTokens;
 
             BigDecimal cost = BigDecimal.ZERO;
             if (config.getInputPricePerMToken() != null) {
