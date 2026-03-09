@@ -4,19 +4,22 @@ import com.agentplatform.common.exception.McpErrorCode;
 import com.agentplatform.common.exception.McpException;
 import com.agentplatform.common.model.CallerIdentity;
 import com.agentplatform.gateway.governance.RateLimitService;
+import com.agentplatform.gateway.mcp.upstream.VaultService;
 import com.agentplatform.gateway.llm.model.*;
 import com.agentplatform.gateway.llm.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.client.WebClient;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.*;
 
 /**
  * LLM Router Service — unified LLM access with model routing, quota management,
- * and usage tracking. Now powered by Spring AI for unified token handling.
+ * and usage tracking. Fetches API keys from Vault, never exposes them to callers.
  */
 @Service
 @ConditionalOnProperty(name = "agent-platform.llm-router.enabled", havingValue = "true")
@@ -28,12 +31,11 @@ public class LlmRouterService {
     private final LlmModelConfigRepository modelConfigRepo;
     private final LlmTenantQuotaRepository quotaRepo;
     private final LlmUsageRecordRepository usageRepo;
+    private final VaultService vault;
+    private final WebClient.Builder webClientBuilder;
     private final RateLimitService rateLimitService;
-    private final SpringAiLlmService springAiLlmService;
 
-    /**
-     * 🎯 使用 Spring AI 的统一聊天接口
-     */
+    @SuppressWarnings("unchecked")
     public Map<String, Object> chat(CallerIdentity identity, String model, List<Map<String, Object>> messages,
                                      Double temperature, Integer maxTokens) {
         String tenantId = identity.getTenantId();
@@ -45,57 +47,21 @@ public class LlmRouterService {
         // 2. Quota check (RPM)
         checkQuota(tenantId, modelConfig.getModelId());
 
-        // 3. Get provider
+        // 3. Get provider and API key
         LlmProvider provider = providerRepo.findById(modelConfig.getProviderId())
             .orElseThrow(() -> new McpException(McpErrorCode.LLM_PROVIDER_ERROR,
                 "Provider not found: " + modelConfig.getProviderId()));
 
-        // 4. Call LLM with fallback using Spring AI
-        Map<String, Object> response = callWithFallback(provider, modelConfig, messages, temperature, maxTokens);
+        String apiKey = vault.getCredential(provider.getApiKeyRef());
 
-        // 5. Record usage (Spring AI automatically provides unified token info!)
+        // 4. Call LLM with fallback
+        Map<String, Object> response = callWithFallback(provider, modelConfig, apiKey, messages, temperature, maxTokens);
+
+        // 5. Record usage
         long latencyMs = System.currentTimeMillis() - start;
         recordUsage(tenantId, modelConfig, response, latencyMs);
 
         return response;
-    }
-
-    /**
-     * 🎯 使用简化 Spring AI 适配器的嵌入接口
-     */
-    public List<float[]> embed(CallerIdentity identity, String model, List<String> texts) {
-        String tenantId = identity.getTenantId();
-        long start = System.currentTimeMillis();
-
-        // 1. Resolve model
-        LlmModelConfig modelConfig = resolveModel(tenantId, model);
-
-        // 2. Quota check (RPM)
-        checkQuota(tenantId, modelConfig.getModelId());
-
-        // 3. Get provider
-        LlmProvider provider = providerRepo.findById(modelConfig.getProviderId())
-            .orElseThrow(() -> new McpException(McpErrorCode.LLM_PROVIDER_ERROR,
-                "Provider not found: " + modelConfig.getProviderId()));
-
-        // 4. Call embedding with simplified adapter
-        Map<String, Object> response = callEmbeddingWithFallback(provider, modelConfig, texts);
-
-        // 5. Record usage
-        long latencyMs = System.currentTimeMillis() - start;
-        recordEmbeddingUsage(tenantId, modelConfig, response, latencyMs);
-
-        // 6. Extract embeddings
-        List<List<Float>> embeddings = (List<List<Float>>) response.get("embeddings");
-        if (embeddings != null && !embeddings.isEmpty()) {
-            List<Float> firstEmbedding = embeddings.get(0);
-            float[] result = new float[firstEmbedding.size()];
-            for (int i = 0; i < firstEmbedding.size(); i++) {
-                result[i] = firstEmbedding.get(i);
-            }
-            return List.of(result);
-        }
-        return List.of(new float[0]);
     }
 
     private LlmModelConfig resolveModel(String tenantId, String requestedModel) {
@@ -141,14 +107,12 @@ public class LlmRouterService {
         }
     }
 
-    /**
-     * 🎯 使用简化 Spring AI 适配器的 Fallback 机制
-     */
+    @SuppressWarnings("unchecked")
     private Map<String, Object> callWithFallback(LlmProvider provider, LlmModelConfig config,
-                                                   List<Map<String, Object>> messages,
+                                                   String apiKey, List<Map<String, Object>> messages,
                                                    Double temperature, Integer maxTokens) {
         try {
-            return springAiLlmService.callChat(provider, config.getModelName(), messages, temperature, maxTokens);
+            return callLlm(provider, config, apiKey, messages, temperature, maxTokens);
         } catch (Exception e) {
             log.warn("LLM call failed for model {}, trying fallback: {}", config.getModelId(), e.getMessage());
 
@@ -158,7 +122,8 @@ public class LlmRouterService {
                 if (fallback != null) {
                     LlmProvider fallbackProvider = providerRepo.findById(fallback.getProviderId()).orElse(null);
                     if (fallbackProvider != null) {
-                        return springAiLlmService.callChat(fallbackProvider, fallback.getModelName(), messages, temperature, maxTokens);
+                        String fallbackKey = vault.getCredential(fallbackProvider.getApiKeyRef());
+                        return callLlm(fallbackProvider, fallback, fallbackKey, messages, temperature, maxTokens);
                     }
                 }
             }
@@ -168,25 +133,58 @@ public class LlmRouterService {
         }
     }
 
-    /**
-     * 🎯 使用简化 Spring AI 适配器调用嵌入
-     */
-    private Map<String, Object> callEmbeddingWithFallback(LlmProvider provider, LlmModelConfig config, List<String> texts) {
-        // RAG embedding is handled by separate implementation, delegate to that
-        throw new UnsupportedOperationException("Embedding is handled by separate RAG implementation");
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> callLlm(LlmProvider provider, LlmModelConfig config,
+                                          String apiKey, List<Map<String, Object>> messages,
+                                          Double temperature, Integer maxTokens) {
+        WebClient client = webClientBuilder.baseUrl(provider.getBaseUrl()).build();
+
+        Map<String, Object> requestBody = new HashMap<>();
+        requestBody.put("model", config.getModelName());
+        requestBody.put("messages", messages);
+        if (temperature != null) requestBody.put("temperature", temperature);
+        if (maxTokens != null) requestBody.put("max_tokens", maxTokens);
+
+        Map<String, Object> response = client.post()
+            .uri("/v1/chat/completions")
+            .header("Authorization", "Bearer " + apiKey)
+            .header("Content-Type", "application/json")
+            .bodyValue(requestBody)
+            .retrieve()
+            .bodyToMono(Map.class)
+            .block(Duration.ofSeconds(60));
+
+        if (response == null) {
+            throw new McpException(McpErrorCode.LLM_PROVIDER_ERROR, "No response from LLM provider");
+        }
+
+        // Extract content from OpenAI-compatible response
+        List<Map<String, Object>> choices = (List<Map<String, Object>>) response.get("choices");
+        Map<String, Object> usage = (Map<String, Object>) response.get("usage");
+
+        String content = "";
+        if (choices != null && !choices.isEmpty()) {
+            Map<String, Object> message = (Map<String, Object>) choices.getFirst().get("message");
+            if (message != null) {
+                content = (String) message.getOrDefault("content", "");
+            }
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("content", content);
+        result.put("model", config.getModelId());
+        result.put("usage", usage != null ? usage : Map.of());
+        return result;
     }
 
-    /**
-     * 🎯 记录使用量 - Spring AI 自动提供统一的 Token 信息！
-     */
-    private void recordUsage(String tenantId, LlmModelConfig config, Map<String, Object> response, long latencyMs) {
+    @SuppressWarnings("unchecked")
+    private void recordUsage(String tenantId, LlmModelConfig config,
+                              Map<String, Object> response, long latencyMs) {
         try {
-            // 🎯 Spring AI 已经在 convertToUnifiedFormat 中提供了统一的 Token 信息
-            Map<String, Object> usage = (Map<String, Object>) response.get("usage");
-            
-            int promptTokens = (Integer) usage.getOrDefault("prompt_tokens", 0);
-            int completionTokens = (Integer) usage.getOrDefault("completion_tokens", 0);
-            int totalTokens = (Integer) usage.getOrDefault("total_tokens", 0);
+            Map<String, Object> usage = (Map<String, Object>) response.getOrDefault("usage", Map.of());
+            int promptTokens = usage.containsKey("prompt_tokens") ? ((Number) usage.get("prompt_tokens")).intValue() : 0;
+            int completionTokens = usage.containsKey("completion_tokens") ? ((Number) usage.get("completion_tokens")).intValue() : 0;
+            int totalTokens = promptTokens + completionTokens;
 
             BigDecimal cost = BigDecimal.ZERO;
             if (config.getInputPricePerMToken() != null) {
@@ -222,48 +220,6 @@ public class LlmRouterService {
                 });
         } catch (Exception e) {
             log.warn("Failed to record LLM usage: {}", e.getMessage());
-        }
-    }
-
-    /**
-     * 🎯 记录嵌入使用量 - 使用统一格式！
-     */
-    private void recordEmbeddingUsage(String tenantId, LlmModelConfig config, Map<String, Object> response, long latencyMs) {
-        try {
-            // 🎯 使用统一格式的 Token 信息
-            Map<String, Object> usage = (Map<String, Object>) response.get("usage");
-            
-            int totalTokens = (Integer) usage.getOrDefault("total_tokens", 0);
-
-            BigDecimal cost = BigDecimal.ZERO;
-            if (config.getInputPricePerMToken() != null) {
-                cost = cost.add(config.getInputPricePerMToken()
-                    .multiply(BigDecimal.valueOf(totalTokens))
-                    .divide(BigDecimal.valueOf(1_000_000), 6, java.math.RoundingMode.HALF_UP));
-            }
-
-            LlmUsageRecord record = LlmUsageRecord.builder()
-                .recordId(UUID.randomUUID().toString())
-                .tenantId(tenantId)
-                .modelId(config.getModelId())
-                .promptTokens(totalTokens)
-                .completionTokens(0)
-                .totalTokens(totalTokens)
-                .cost(cost)
-                .latencyMs(latencyMs)
-                .build();
-
-            usageRepo.save(record);
-
-            // Update monthly usage
-            quotaRepo.findByTenantIdAndModelId(tenantId, config.getModelId())
-                .or(() -> quotaRepo.findByTenantIdAndModelId(tenantId, "*"))
-                .ifPresent(quota -> {
-                    quota.setCurrentMonthUsage(quota.getCurrentMonthUsage() + totalTokens);
-                    quotaRepo.save(quota);
-                });
-        } catch (Exception e) {
-            log.warn("Failed to record embedding usage: {}", e.getMessage());
         }
     }
 }
