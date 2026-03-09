@@ -30,6 +30,10 @@ public class LlmProvider {
     @Builder.Default
     private String status = "active";
 
+    @Column(name = "provider_type", nullable = false)
+    @Builder.Default
+    private String providerType = "openai";  // openai, anthropic, google, qwen
+
     @Column(name = "created_at", nullable = false, updatable = false)
     @Builder.Default
     private Instant createdAt = Instant.now();
